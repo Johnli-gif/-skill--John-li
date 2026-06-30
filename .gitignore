@@ -1,0 +1,5 @@
+.env
+*.env
+!*.env.example
+data/cloud-monitor/state.json
+data/market/latest/*.json

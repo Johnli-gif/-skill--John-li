@@ -1,0 +1,2 @@
+# 备用 cron 方案：每个交易日 9-15 点每 10 分钟执行一次，脚本内部会自动跳过午休和非交易时间。
+*/10 9-15 * * 1-5 cd /opt/ashare-monitor && set -a && . /etc/ashare-monitor.env && set +a && /usr/bin/python3 scripts/cloud_monitor.py >> /var/log/ashare-monitor.log 2>&1

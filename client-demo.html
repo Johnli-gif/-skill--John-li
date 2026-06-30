@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Today Orders Verify</title>
+  <style>
+    body { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 24px; color: #0f172a; background: #f6f8fb; }
+    main { max-width: 860px; margin: 0 auto; }
+    h1 { font-size: 22px; }
+    .panel { background: #ffffff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 16px; margin: 12px 0; }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; }
+    button, input, select { font: inherit; }
+    button { background: #0f172a; color: #fff; border: 0; border-radius: 10px; padding: 10px 14px; cursor: pointer; }
+    button.secondary { background: #e5e7eb; color: #0f172a; }
+    pre { background: #0b1220; color: #e5e7eb; padding: 12px; border-radius: 10px; overflow: auto; }
+    .hint { color: #475569; font-size: 13px; }
+    .badge { display: inline-block; padding: 4px 8px; border-radius: 8px; background: #e5e7eb; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Today Orders Verify</h1>
+    <p class="hint">最小验证页：只验证“服务化入口 / GET 数据 / POST 回传”，不侵入 app.js 复杂逻辑。</p>
+
+    <section class="panel">
+      <h2>1. 入口</h2>
+      <div class="row">
+        <input id="baseUrl" value="http://127.0.0.1:8090" />
+        <button id="healthBtn">检查 /api/health</button>
+      </div>
+      <p class="hint" id="healthText">未检查</p>
+    </section>
+
+    <section class="panel">
+      <h2>2. 读取</h2>
+      <div class="row">
+        <button id="fetchBtn">GET /_today_orders</button>
+        <input id="querySource" value="battle" />
+        <span class="hint" id="fetchTime">等待读取…</span>
+      </div>
+      <pre id="fetchOutput">等待读取...</pre>
+    </section>
+
+    <section class="panel">
+      <h2>3. 回填</h2>
+      <div class="row">
+        <input id="feedbackCode" placeholder="code" />
+        <select id="feedbackStatus">
+          <option value="executed">已执行</option>
+          <option value="partial">部分执行</option>
+          <option value="no-trigger">未触发</option>
+          <option value="skipped">主动放弃</option>
+        </select>
+        <input id="feedbackPrice" placeholder="price" />
+        <input id="feedbackShares" placeholder="shares" />
+        <button id="postBtn">POST /_today_orders</button>
+      </div>
+      <pre id="postOutput">等待回填…</pre>
+    </section>
+
+    <section class="panel">
+      <h2>4. 服务端落盘结果</h2>
+      <pre id="serverOutput">尚未写入服务端…</pre>
+    </section>
+  </main>
+
+  <script>
+    const baseInput = document.getElementById("baseUrl");
+    const healthBtn = document.getElementById("healthBtn");
+    const healthText = document.getElementById("healthText");
+    const fetchBtn = document.getElementById("fetchBtn");
+    const fetchOutput = document.getElementById("fetchOutput");
+    const postBtn = document.getElementById("postBtn");
+    const postOutput = document.getElementById("postOutput");
+    const resultBox = document.getElementById("resultBox");
+    const serverOutput = document.getElementById("serverOutput");
+
+    function base() { return (baseInput.value || "http://127.0.0.1:8090").replace(/\/$/, ""); }
+
+    async function request(method, urlPath, body) {
+      const res = await fetch(base() + urlPath, {
+        method,
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: body ? JSON.stringify(body) : undefined
+      });
+      const text = await res.text();
+      let data;
+      try { data = JSON.parse(text); } catch (e) { data = { raw: text }; }
+      return { status: res.status, data };
+    }
+
+    healthBtn.addEventListener("click", async () => {
+      try {
+        const { status, data } = await request("GET", "/api/health");
+        healthText.textContent = `${status} => ${JSON.stringify(data)}`;
+      } catch (e) {
+        healthText.textContent = "请求失败：" + e.message;
+      }
+    });
+
+    fetchBtn.addEventListener("click", async () => {
+      try {
+        const source = encodeURIComponent(document.getElementById("querySource").value || "battle");
+        const { status, data } = await request("GET", `/_today_orders?trigger=1&source=${source}`);
+        fetchOutput.textContent = `${status}\n${JSON.stringify(data, null, 2)}`;
+        fetchTime.textContent = "最后更新：" + new Date().toLocaleTimeString();
+        resultBox.textContent = "已读取 today orders：" + (data.ok ? "ok" : "FAIL");
+      } catch (e) {
+        fetchOutput.textContent = "请求失败：" + e.message;
+        fetchTime.textContent = "读取失败";
+        resultBox.textContent = "GET/_today_orders 失败";
+      }
+    });
+
+    async function refreshServerOutput() {
+      try {
+        const source = encodeURIComponent(document.getElementById("querySource").value || "battle");
+        const { status, data } = await request("GET", `/_today_orders?trigger=1&source=${source}`);
+        serverOutput.textContent = `${status}\n${JSON.stringify(data, null, 2)}`;
+      } catch (e) {
+        serverOutput.textContent = "请求失败：" + e.message;
+      }
+    }
+
+    postBtn.addEventListener("click", async () => {
+      try {
+        const code = document.getElementById("feedbackCode").value || "demo";
+        const status = document.getElementById("feedbackStatus").value || "executed";
+        const price = document.getElementById("feedbackPrice").value ? Number(document.getElementById("feedbackPrice").value) : null;
+        const shares = document.getElementById("feedbackShares").value ? Number(document.getElementById("feedbackShares").value) : null;
+        const payload = {
+          orders: [{ code, command: "today-orders-demo", intent: "demo" }],
+          feedback: { [code]: { code, status, price, shares, note: "client-demo verify", updatedAt: new Date().toISOString() } }
+        };
+        const { status: postStatus, data } = await request("POST", "/_today_orders", payload);
+        postOutput.textContent = `${postStatus}\n${JSON.stringify(data, null, 2)}`;
+        resultBox.textContent = "已回填：" + (data.ok ? "ok" : "FAIL");
+        await refreshServerOutput();
+      } catch (e) {
+        postOutput.textContent = "请求失败：" + e.message;
+        resultBox.textContent = "POST/_today_orders 失败";
+      }
+    });
+
+    window.addEventListener("DOMContentLoaded", () => {
+      fetchBtn.click();
+      refreshServerOutput();
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>A股热点风格工作台</title>
+    <link rel="stylesheet" href="styles.css?v=20260629-density-v1">
+  </head>
+  <body>
+    <main class="app-shell">
+      <aside class="sidebar" aria-label="工作台导航">
+        <div class="brand-block">
+          <div class="brand-mark">A</div>
+          <div>
+            <h1>A股热点风格工作台</h1>
+            <p id="todayLabel"></p>
+          </div>
+        </div>
+
+        <nav class="nav-list">
+          <a href="#battle" class="nav-item active">今日建议</a>
+          <a href="#goal" class="nav-item">30天目标</a>
+          <a href="#positions" class="nav-item">持仓体检</a>
+          <a href="#sizing" class="nav-item">仓位预算</a>
+          <a href="#intraday" class="nav-item">盘中检查</a>
+          <a href="#closeReview" class="nav-item">收盘复盘</a>
+        </nav>
+
+        <section class="risk-panel" aria-labelledby="riskTitle">
+          <h2 id="riskTitle">今日纪律</h2>
+          <label>
+            <span>单笔风险</span>
+            <input id="riskPerTrade" type="range" min="0.5" max="5" step="0.5">
+            <strong id="riskValue"></strong>
+          </label>
+          <label>
+            <span>最大仓位</span>
+            <input id="maxPosition" type="range" min="10" max="100" step="5">
+            <strong id="positionValue"></strong>
+          </label>
+          <button id="resetData" class="ghost-button" type="button">重置本地数据</button>
+        </section>
+      </aside>
+
+      <section class="workspace">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Daily China A-share pulse</p>
+            <h2>买卖只看今日建议，其余只做校验</h2>
+          </div>
+          <div class="market-state" aria-label="市场状态">
+            <span id="marketMood">均衡观察</span>
+            <strong id="focusScore">--</strong>
+          </div>
+        </header>
+
+        <section class="content-grid">
+          <section id="battle" class="panel panel-wide" aria-labelledby="battleTitle">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Action first</p>
+                <h3 id="battleTitle">今日操作建议与作战页</h3>
+              </div>
+            </div>
+            <div id="battlePlan" class="battle-plan"></div>
+          </section>
+
+          <section id="goal" class="panel panel-wide" aria-labelledby="goalTitle">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">30 day target</p>
+                <h3 id="goalTitle">30天收益目标追踪</h3>
+              </div>
+              <button id="updateGoal" class="primary-button" type="button">更新目标</button>
+            </div>
+            <div class="goal-form">
+              <label>
+                <span>起始资产</span>
+                <input id="goalStartAssets" type="number" min="0" step="100">
+              </label>
+              <label>
+                <span>当前资产</span>
+                <input id="goalCurrentAssets" type="number" min="0" step="100">
+              </label>
+              <label>
+                <span>现金余额</span>
+                <input id="accountCashBalance" type="number" min="0" step="100">
+              </label>
+              <label>
+                <span>目标收益率</span>
+                <input id="goalTargetReturn" type="number" min="1" max="100" step="1">
+              </label>
+              <label>
+                <span>最大回撤</span>
+                <input id="goalMaxDrawdown" type="number" min="1" max="30" step="1">
+              </label>
+              <label>
+                <span>目标日期</span>
+                <input id="goalDeadline" type="date">
+              </label>
+            </div>
+            <div id="goalTracker" class="goal-tracker"></div>
+          </section>
+
+          <section id="sizing" class="panel panel-wide" aria-labelledby="sizingTitle">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Position sizing</p>
+                <h3 id="sizingTitle">仓位预算参考</h3>
+              </div>
+              <button id="recalcSizing" class="ghost-button" type="button">重算</button>
+            </div>
+            <div id="sizingPlanner" class="sizing-planner"></div>
+          </section>
+
+          <section id="intraday" class="panel panel-wide" aria-labelledby="intradayTitle">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Trading-day 09:45 / 14:30</p>
+                <h3 id="intradayTitle">交易日成交记录检查</h3>
+              </div>
+              <button id="resetIntradayChecks" class="ghost-button" type="button">清空今日成交截图</button>
+            </div>
+            <div id="intradayChecklist" class="intraday-checklist"></div>
+          </section>
+
+          <section id="closeReview" class="panel panel-wide" aria-labelledby="closeReviewTitle">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Close review</p>
+                <h3 id="closeReviewTitle">收盘目标偏离复盘</h3>
+              </div>
+              <button id="saveCloseReview" class="primary-button" type="button">保存复盘</button>
+            </div>
+            <div id="closeReviewBox" class="close-review-box"></div>
+          </section>
+
+          <section id="positions" class="panel panel-wide" aria-labelledby="positionsTitle">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Portfolio check</p>
+                <h3 id="positionsTitle">持仓数据核对</h3>
+              </div>
+              <div class="panel-actions">
+                <button id="refreshQuotes" class="primary-button" type="button">刷新行情</button>
+                <button id="loadKnownPortfolio" class="ghost-button" type="button">载入样例持仓</button>
+                <button id="clearPortfolio" class="ghost-button" type="button">清空持仓</button>
+              </div>
+            </div>
+            <div id="screenshotImport" class="screenshot-import"></div>
+            <div id="quoteStatus" class="quote-status"></div>
+            <div class="position-form">
+              <input id="positionName" type="text" placeholder="名称">
+              <input id="positionCode" type="text" placeholder="代码">
+              <input id="positionQuantity" type="number" min="0" step="100" placeholder="股数">
+              <input id="positionCost" type="number" min="0" step="0.001" placeholder="成本">
+              <input id="positionPrice" type="number" min="0" step="0.001" placeholder="现价">
+              <input id="positionStop" type="text" placeholder="止损/减仓线">
+              <input id="positionTrigger" type="text" placeholder="加仓/止盈触发">
+              <input id="positionPlan" type="text" placeholder="当前计划">
+              <button id="addPosition" class="primary-button" type="button">加入持仓</button>
+            </div>
+            <div id="portfolioSummary" class="portfolio-summary"></div>
+            <div id="positionList" class="position-list"></div>
+          </section>
+
+        </section>
+      </section>
+    </main>
+
+    <script src="app.js?v=20260629-density-v1&cacheBust=compactDecisionLayout"></script>
+  </body>
+</html>

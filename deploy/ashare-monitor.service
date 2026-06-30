@@ -1,0 +1,11 @@
+[Unit]
+Description=A-share cloud monitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/ashare-monitor
+EnvironmentFile=/etc/ashare-monitor.env
+ExecStart=/usr/bin/python3 /opt/ashare-monitor/scripts/cloud_monitor.py
+Nice=5

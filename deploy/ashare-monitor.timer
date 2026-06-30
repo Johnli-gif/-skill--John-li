@@ -1,0 +1,11 @@
+[Unit]
+Description=Run A-share cloud monitor every 10 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=10min
+Persistent=true
+Unit=ashare-monitor.service
+
+[Install]
+WantedBy=timers.target
