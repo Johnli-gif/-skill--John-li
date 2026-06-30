@@ -27,6 +27,14 @@ on:
         options:
           - "false"
           - "true"
+      test_mail:
+        description: "Send one email test notification"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
   schedule:
     # GitHub Actions cron uses UTC. These schedules map to Beijing time:
     # 09:25-11:35 and 12:55-15:05, every 10 minutes on weekdays.
@@ -120,6 +128,47 @@ jobs:
           with urllib.request.urlopen(req, timeout=20) as resp:
               body = resp.read().decode("utf-8", "replace")
           print(body)
+          PY
+
+      - name: Test email channel
+        if: ${{ inputs.test_mail == 'true' }}
+        run: |
+          python - <<'PY'
+          import email.utils
+          import os
+          import smtplib
+          import ssl
+          from email.mime.text import MIMEText
+
+          host = os.environ.get("SMTP_HOST", "").strip()
+          port = int(os.environ.get("SMTP_PORT", "465"))
+          user = os.environ.get("SMTP_USERNAME", "").strip()
+          password = os.environ.get("SMTP_PASSWORD", "")
+          to_addr = os.environ.get("MAIL_TO", "").strip()
+          from_addr = os.environ.get("MAIL_FROM", "").strip() or user
+          if not all([host, user, password, to_addr, from_addr]):
+              raise SystemExit("SMTP_HOST/SMTP_USERNAME/SMTP_PASSWORD/MAIL_TO/MAIL_FROM are required")
+
+          message = MIMEText(
+              "财经热点分析云端邮件提醒已连接。后续交易时段每10分钟检查行情，触发交易条件时发送邮件。",
+              "plain",
+              "utf-8",
+          )
+          message["Subject"] = "A股监控邮件通道测试"
+          message["From"] = from_addr
+          message["To"] = to_addr
+          message["Date"] = email.utils.formatdate(localtime=True)
+
+          if port == 465:
+              with smtplib.SMTP_SSL(host, port, context=ssl.create_default_context(), timeout=20) as smtp:
+                  smtp.login(user, password)
+                  smtp.sendmail(from_addr, [to_addr], message.as_string())
+          else:
+              with smtplib.SMTP(host, port, timeout=20) as smtp:
+                  smtp.starttls(context=ssl.create_default_context())
+                  smtp.login(user, password)
+                  smtp.sendmail(from_addr, [to_addr], message.as_string())
+          print("email sent")
           PY
 
       - name: Validate config

@@ -463,12 +463,16 @@ def notify_all(title: str, plain: str, markdown: str, sms: str, dry_run: bool) -
     if dry_run:
         print(markdown)
         return ["dry-run"]
-    if notify_wechat(title, plain, markdown):
-        channels.append("wechat")
-    if notify_email(title, plain):
-        channels.append("email")
-    if notify_sms(title, sms):
-        channels.append("sms")
+    for channel, sender in (
+        ("wechat", lambda: notify_wechat(title, plain, markdown)),
+        ("email", lambda: notify_email(title, plain)),
+        ("sms", lambda: notify_sms(title, sms)),
+    ):
+        try:
+            if sender():
+                channels.append(channel)
+        except Exception as exc:
+            print(f"[WARN] {channel}通知失败：{exc}")
     return channels
 
 
