@@ -134,41 +134,52 @@ jobs:
         if: ${{ inputs.test_mail == 'true' }}
         run: |
           python - <<'PY'
-          import email.utils
-          import os
-          import smtplib
-          import ssl
-          from email.mime.text import MIMEText
+          from scripts.cloud_monitor import Alert, build_message, notify_email
 
-          host = os.environ.get("SMTP_HOST", "").strip()
-          port = int(os.environ.get("SMTP_PORT", "465"))
-          user = os.environ.get("SMTP_USERNAME", "").strip()
-          password = os.environ.get("SMTP_PASSWORD", "")
-          to_addr = os.environ.get("MAIL_TO", "").strip()
-          from_addr = os.environ.get("MAIL_FROM", "").strip() or user
-          if not all([host, user, password, to_addr, from_addr]):
-              raise SystemExit("SMTP_HOST/SMTP_USERNAME/SMTP_PASSWORD/MAIL_TO/MAIL_FROM are required")
-
-          message = MIMEText(
-              "财经热点分析云端邮件提醒已连接。后续交易时段每10分钟检查行情，触发交易条件时发送邮件。",
-              "plain",
-              "utf-8",
-          )
-          message["Subject"] = "A股监控邮件通道测试"
-          message["From"] = from_addr
-          message["To"] = to_addr
-          message["Date"] = email.utils.formatdate(localtime=True)
-
-          if port == 465:
-              with smtplib.SMTP_SSL(host, port, context=ssl.create_default_context(), timeout=20) as smtp:
-                  smtp.login(user, password)
-                  smtp.sendmail(from_addr, [to_addr], message.as_string())
-          else:
-              with smtplib.SMTP(host, port, timeout=20) as smtp:
-                  smtp.starttls(context=ssl.create_default_context())
-                  smtp.login(user, password)
-                  smtp.sendmail(from_addr, [to_addr], message.as_string())
-          print("email sent")
+          panel = {
+              "account": {
+                  "brokerReportedAssets": 519716.77,
+                  "brokerReportedPositionRatio": 55.9,
+              }
+          }
+          gate = {
+              "title": "模拟：市场可小仓试错",
+              "metrics": "上证+0.30%｜深成+0.80%｜创业板+1.10%｜科创50+0.60%",
+          }
+          alerts = [
+              Alert(
+                  level="sell",
+                  code="300776",
+                  name="帝尔激光",
+                  price=204.80,
+                  rule_price=205.00,
+                  action="模拟触发：帝尔激光新增仓跌破205，先减半；跌破198处理新增仓",
+                  reason="模拟行情：现价204.80 <= 风控线205.00",
+              ),
+              Alert(
+                  level="buy",
+                  code="000021",
+                  name="深科技",
+                  price=62.10,
+                  rule_price=62.00,
+                  action="模拟触发：深科技站上62，存储芯片方向可试仓500股",
+                  reason="模拟行情：现价62.10 >= 触发价62.00；市场可小仓试错",
+              ),
+              Alert(
+                  level="buy",
+                  code="002185",
+                  name="华天科技",
+                  price=22.86,
+                  rule_price=22.80,
+                  action="模拟触发：华天科技站稳22.8，封测板块放量时继续持有或小幅加仓",
+                  reason="模拟行情：现价22.86 >= 触发价22.80；市场可小仓试错",
+              ),
+          ]
+          title, plain, _, _ = build_message(panel, gate, alerts)
+          title = f"模拟{title}"
+          if not notify_email(title, plain):
+              raise SystemExit("email channel is not configured")
+          print("simulated alert email sent")
           PY
 
       - name: Validate config
