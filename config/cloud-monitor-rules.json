@@ -9,7 +9,7 @@
     },
     "002185": {
       "stopBelow": 22.0,
-      "stopAction": "华天科技跌破22.0，先减半；跌破21.75清掉新增逻辑",
+      "stopAction": "华天科技跌破22.0，直接清仓2000股换强，不再减半观察",
       "watchAbove": 22.8,
       "watchAction": "华天科技站稳22.8，封测板块放量时继续持有",
       "watchNotify": false
@@ -24,9 +24,11 @@
     "300776": {
       "stopBelow": 208.0,
       "stopAction": "帝尔激光跌破208，减300股锁利润；跌破205继续处理新增仓",
-      "watchAbove": 222.0,
-      "watchAction": "帝尔激光冲高到222附近，观察是否分批兑现新增仓利润",
-      "watchNotify": false
+      "watchAbove": 226.0,
+      "watchAction": "帝尔激光冲高到226附近，观察第二笔止盈",
+      "watchNotify": false,
+      "takeProfitAbove": 222.0,
+      "takeProfitAction": "帝尔激光冲高到222以上，先卖100-200股锁利润；若继续上冲到226附近再看第二笔止盈"
     },
     "600276": {
       "stopBelow": 51.5,
@@ -48,22 +50,27 @@
       "code": "002156",
       "name": "通富微电",
       "buyAbove": 76.2,
-      "action": "先进封装/封测继续确认，站稳76.2且板块放量时只试仓300-500股",
-      "requireMarketGate": true
+      "action": "先进封装/封测继续确认，站稳76.2且板块放量时只试仓300-500股；单日新增买入只选这一只优先，预算不超过6万",
+      "requireMarketGate": true,
+      "priority": 1
     },
     {
       "code": "300502",
       "name": "新易盛",
       "buyAbove": 615.0,
-      "action": "AI算力/CPO强势确认，站稳615只允许小仓追踪，不超过6万元",
-      "requireMarketGate": true
+      "action": "AI算力/CPO强势确认，站稳615才小仓追踪；仅在通富未触发或明显弱于CPO时考虑，预算不超过6万",
+      "requireMarketGate": true,
+      "priority": 2
     },
     {
       "code": "002747",
       "name": "埃斯顿",
       "buyAbove": 38.2,
-      "action": "机器人方向轮动确认，突破38.2可小仓观察，不追一字或大幅高开",
-      "requireMarketGate": true
+      "action": "机器人方向轮动确认，突破38.2可小仓观察；仅在科技主线不触发时考虑，预算不超过6万",
+      "requireMarketGate": true,
+      "priority": 3
     }
-  ]
+  ],
+  "maxCandidateAlerts": 1,
+  "maxNewBuyBudget": 60000
 }

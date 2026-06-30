@@ -231,6 +231,7 @@ def evaluate_positions(panel: dict[str, Any], quotes: dict[str, dict[str, Any]],
             continue
         rule = build_position_rule(position, overrides)
         stop_below = numeric(rule.get("stopBelow"))
+        take_profit_above = numeric(rule.get("takeProfitAbove"))
         watch_above = numeric(rule.get("watchAbove"))
         name = position.get("name") or quote.get("name") or code
         if stop_below and price <= stop_below:
@@ -242,6 +243,17 @@ def evaluate_positions(panel: dict[str, Any], quotes: dict[str, dict[str, Any]],
                 rule_price=stop_below,
                 action=rule.get("stopAction", "触发风控线"),
                 reason=f"现价{price:.2f} <= 风控线{stop_below:.2f}",
+            ))
+            continue
+        if take_profit_above and price >= take_profit_above:
+            alerts.append(Alert(
+                level="sell",
+                code=code,
+                name=name,
+                price=price,
+                rule_price=take_profit_above,
+                action=rule.get("takeProfitAction", "触发止盈线"),
+                reason=f"现价{price:.2f} >= 止盈线{take_profit_above:.2f}",
             ))
             continue
         if watch_above and price >= watch_above and str(rule.get("watchNotify", "true")).lower() != "false":
@@ -258,7 +270,7 @@ def evaluate_positions(panel: dict[str, Any], quotes: dict[str, dict[str, Any]],
 
 
 def evaluate_candidates(quotes: dict[str, dict[str, Any]], rules: dict[str, Any], gate: dict[str, Any]) -> list[Alert]:
-    alerts: list[Alert] = []
+    keyed_alerts: list[tuple[int, Alert]] = []
     for item in rules.get("candidates", []):
         code = normalize_code(item.get("code"))
         quote = quotes.get(code) or {}
@@ -270,8 +282,9 @@ def evaluate_candidates(quotes: dict[str, dict[str, Any]], rules: dict[str, Any]
             continue
         buy_above = numeric(item.get("buyAbove"))
         buy_below = numeric(item.get("buyBelow"))
+        priority = int(numeric(item.get("priority"), 999))
         if buy_above and price >= buy_above:
-            alerts.append(Alert(
+            keyed_alerts.append((priority, Alert(
                 level="buy",
                 code=code,
                 name=name,
@@ -279,9 +292,9 @@ def evaluate_candidates(quotes: dict[str, dict[str, Any]], rules: dict[str, Any]
                 rule_price=buy_above,
                 action=item.get("action", "候选股触发买入观察"),
                 reason=f"现价{price:.2f} >= 触发价{buy_above:.2f}；{gate.get('title')}",
-            ))
+            )))
         elif buy_below and price <= buy_below:
-            alerts.append(Alert(
+            keyed_alerts.append((priority, Alert(
                 level="buy",
                 code=code,
                 name=name,
@@ -289,8 +302,11 @@ def evaluate_candidates(quotes: dict[str, dict[str, Any]], rules: dict[str, Any]
                 rule_price=buy_below,
                 action=item.get("action", "候选股回踩触发观察"),
                 reason=f"现价{price:.2f} <= 回踩价{buy_below:.2f}；{gate.get('title')}",
-            ))
-    return alerts
+            )))
+    keyed_alerts.sort(key=lambda item: item[0])
+    max_alerts = int(numeric(rules.get("maxCandidateAlerts"), 0))
+    alerts = [alert for _, alert in keyed_alerts]
+    return alerts[:max_alerts] if max_alerts > 0 else alerts
 
 
 def should_send(alerts: list[Alert], state_path: Path, quiet_minutes: int, force: bool) -> bool:
