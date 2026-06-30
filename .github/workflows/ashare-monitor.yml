@@ -19,6 +19,14 @@ on:
         options:
           - "false"
           - "true"
+      test_push:
+        description: "Send one PushPlus test notification"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
   schedule:
     # GitHub Actions cron uses UTC. These schedules map to Beijing time:
     # 09:25-11:35 and 12:55-15:05, every 10 minutes on weekdays.
@@ -84,6 +92,35 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
+      - name: Test PushPlus channel
+        if: ${{ inputs.test_push == 'true' }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import urllib.request
+
+          token = os.environ.get("PUSHPLUS_TOKEN", "").strip()
+          if not token:
+              raise SystemExit("PUSHPLUS_TOKEN is not configured")
+
+          payload = {
+              "token": token,
+              "title": "A股监控通道测试",
+              "content": "财经热点分析云端监控已连接。后续交易时段每10分钟检查行情，触发交易条件时推送提醒。",
+              "template": "markdown",
+          }
+          req = urllib.request.Request(
+              "https://www.pushplus.plus/send",
+              data=json.dumps(payload).encode("utf-8"),
+              method="POST",
+              headers={"Content-Type": "application/json"},
+          )
+          with urllib.request.urlopen(req, timeout=20) as resp:
+              body = resp.read().decode("utf-8", "replace")
+          print(body)
+          PY
 
       - name: Validate config
         run: |
