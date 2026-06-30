@@ -1,15 +1,15 @@
 {
   "positions": {
     "000021": {
-      "stopBelow": 59.45,
-      "stopAction": "深科技跌破59.45，试仓失败，先止损或至少减半",
-      "watchAbove": 62,
-      "watchAction": "深科技站上62，观察是否需要分批兑现或继续持有",
+      "stopBelow": 62.2,
+      "stopAction": "深科技跌破62.2，先减半锁利润；跌破61.0清掉试仓",
+      "watchAbove": 66.0,
+      "watchAction": "深科技站稳66，存储芯片趋势延续，继续持有",
       "watchNotify": false
     },
     "002185": {
-      "stopBelow": 22.15,
-      "stopAction": "华天科技跌破22.15，先减半；跌破21.9退出新增逻辑",
+      "stopBelow": 22.0,
+      "stopAction": "华天科技跌破22.0，先减半；跌破21.75清掉新增逻辑",
       "watchAbove": 22.8,
       "watchAction": "华天科技站稳22.8，封测板块放量时继续持有",
       "watchNotify": false
@@ -17,15 +17,15 @@
     "300433": {
       "stopBelow": 52.8,
       "stopAction": "蓝思科技跌破52.8，先减半；跌破52.2退出新增逻辑",
-      "watchAbove": 54.2,
-      "watchAction": "蓝思科技站稳54.2并放量，玻璃基板/TGV情绪延续",
+      "watchAbove": 55.2,
+      "watchAction": "蓝思科技站稳55.2并放量，玻璃基板/TGV情绪延续",
       "watchNotify": false
     },
     "300776": {
-      "stopBelow": 205,
-      "stopAction": "帝尔激光新增500股跌破205，先减半；跌破198处理新增仓",
-      "watchAbove": 218,
-      "watchAction": "帝尔激光冲高到218附近，观察是否分批兑现新增仓利润",
+      "stopBelow": 208.0,
+      "stopAction": "帝尔激光跌破208，减300股锁利润；跌破205继续处理新增仓",
+      "watchAbove": 222.0,
+      "watchAction": "帝尔激光冲高到222附近，观察是否分批兑现新增仓利润",
       "watchNotify": false
     },
     "600276": {
@@ -36,8 +36,8 @@
       "watchNotify": false
     },
     "600406": {
-      "stopBelow": 22.6,
-      "stopAction": "国电南瑞跌破22.6，减500股；跌破22.3退出新增逻辑",
+      "stopBelow": 22.55,
+      "stopAction": "国电南瑞跌破22.55，减500股；跌破22.3退出新增逻辑",
       "watchAbove": 23.5,
       "watchAction": "国电南瑞站稳23.5且电网板块走强，可考虑加300-500股",
       "watchNotify": false
@@ -45,24 +45,24 @@
   },
   "candidates": [
     {
-      "code": "002371",
-      "name": "北方华创",
-      "buyAbove": 900,
-      "action": "半导体设备龙头触发强势确认，只能小仓试错",
+      "code": "002156",
+      "name": "通富微电",
+      "buyAbove": 76.2,
+      "action": "先进封装/封测继续确认，站稳76.2且板块放量时只试仓300-500股",
       "requireMarketGate": true
     },
     {
-      "code": "300308",
-      "name": "中际旭创",
-      "buyAbove": 1300,
-      "action": "AI光模块强势确认，作为全局科技主线锚观察",
+      "code": "300502",
+      "name": "新易盛",
+      "buyAbove": 615.0,
+      "action": "AI算力/CPO强势确认，站稳615只允许小仓追踪，不超过6万元",
       "requireMarketGate": true
     },
     {
       "code": "002747",
       "name": "埃斯顿",
-      "buyAbove": 38.5,
-      "action": "机器人方向触发轮动确认，仅小仓观察",
+      "buyAbove": 38.2,
+      "action": "机器人方向轮动确认，突破38.2可小仓观察，不追一字或大幅高开",
       "requireMarketGate": true
     }
   ]
