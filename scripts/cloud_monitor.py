@@ -316,6 +316,39 @@ def mark_sent(alerts: list[Alert], state_path: Path) -> None:
     save_json(state_path, {"last_signature": signature, "last_sent_at": now().isoformat()})
 
 
+def alert_direction(alert: Alert) -> str:
+    return {
+        "sell": "卖出/减仓",
+        "buy": "买入/试仓",
+        "watch": "观察",
+    }.get(alert.level, alert.level)
+
+
+def alert_condition(alert: Alert) -> str:
+    if alert.rule_price is None:
+        return "触发线未设置"
+    operator = "<=" if alert.level == "sell" else ">="
+    if "回踩" in alert.action or "<= 回踩价" in alert.reason:
+        operator = "<="
+    return f"现价 {alert.price:.2f} {operator} 条件价 {alert.rule_price:.2f}"
+
+
+def alert_reference_price(alert: Alert) -> str:
+    if alert.level == "sell":
+        return f"卖出/减仓参考价：{alert.price:.2f} 附近；风控线：{alert.rule_price:.2f}" if alert.rule_price else f"卖出/减仓参考价：{alert.price:.2f} 附近"
+    if alert.level == "buy":
+        return f"买入/试仓参考价：{alert.price:.2f} 附近；触发线：{alert.rule_price:.2f}" if alert.rule_price else f"买入/试仓参考价：{alert.price:.2f} 附近"
+    return f"观察参考价：{alert.price:.2f} 附近；观察线：{alert.rule_price:.2f}" if alert.rule_price else f"观察参考价：{alert.price:.2f} 附近"
+
+
+def alert_distance(alert: Alert) -> str:
+    if not alert.rule_price:
+        return ""
+    diff = alert.price - alert.rule_price
+    pct = diff / alert.rule_price * 100
+    return f"距条件价 {diff:+.2f} / {pct:+.2f}%"
+
+
 def build_message(panel: dict[str, Any], gate: dict[str, Any], alerts: list[Alert]) -> tuple[str, str, str]:
     account = panel.get("account", {})
     title = f"A股触发提醒 {now().strftime('%H:%M')}"
@@ -331,15 +364,33 @@ def build_message(panel: dict[str, Any], gate: dict[str, Any], alerts: list[Aler
         f"- **账户**：总资产{account.get('brokerReportedAssets', panel.get('goal', {}).get('currentAssets', '--'))}，仓位{account.get('brokerReportedPositionRatio', '--')}%",
         "",
     ]
-    for alert in alerts:
-        line = f"{alert.name} {alert.code} 现价{alert.price:.2f}：{alert.action}。{alert.reason}"
-        plain.append(f"- {line}")
-        markdown.append(f"- **{alert.name} {alert.code}** 现价`{alert.price:.2f}`：{alert.action}。{alert.reason}")
+    for index, alert in enumerate(alerts, 1):
+        distance = alert_distance(alert)
+        plain.extend([
+            f"{index}. {alert.name} {alert.code}",
+            f"   类型：{alert_direction(alert)}",
+            f"   当前价：{alert.price:.2f}",
+            f"   触发条件：{alert_condition(alert)}" + (f"（{distance}）" if distance else ""),
+            f"   执行参考：{alert_reference_price(alert)}",
+            f"   具体动作：{alert.action}",
+            f"   触发依据：{alert.reason}",
+            "",
+        ])
+        markdown.extend([
+            f"{index}. **{alert.name} {alert.code}**",
+            f"   - 类型：**{alert_direction(alert)}**",
+            f"   - 当前价：`{alert.price:.2f}`",
+            f"   - 触发条件：{alert_condition(alert)}" + (f"（{distance}）" if distance else ""),
+            f"   - 执行参考：{alert_reference_price(alert)}",
+            f"   - 具体动作：{alert.action}",
+            f"   - 触发依据：{alert.reason}",
+            "",
+        ])
     plain.append("")
     plain.append("仅为公开行情触发提醒，不自动下单。真实持仓以券商账户为准。")
     markdown.append("")
     markdown.append("> 仅为公开行情触发提醒，不自动下单。真实持仓以券商账户为准。")
-    sms = "；".join(f"{a.name}{a.price:.2f}:{a.action}" for a in alerts[:3])
+    sms = "；".join(f"{a.name}{a.price:.2f}/{alert_direction(a)}:{a.action}" for a in alerts[:3])
     return title, "\n".join(plain), "\n".join(markdown)[:3900], sms[:180]
 
 
