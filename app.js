@@ -476,12 +476,21 @@ const positionTrackTagMap = {
 const broadConflictTags = new Set(["科技", "设备", "材料", "防守", "国产替代"]);
 
 const tradeMechanismPolicy = {
-  version: "2026-07-01-cadence-repair",
+  version: "2026-07-02-focused-right-side-swing",
   defaultMode: "赛道埋伏+趋势持有",
+  maxActiveStocks: 3,
+  maxSectorTracks: 3,
+  strongMarketHighUpsideMaxExposure: 80,
+  strongMarketMediumUpsideExposureRange: "30%-50%",
+  weakMarketDefaultExposure: 0,
+  defaultTradeDirection: "右侧趋势波段",
+  actionAdviceAfter: "10:00",
+  lossReviewPct: -5,
+  profitHalfProtectPct: 20,
   sameDayRebuyBlocked: true,
   fullExitCoolingTradingDays: 1,
   buyGateLabels: ["市场闸门", "赛道确认", "个股量价"],
-  note: "30天目标只做进度校验，不直接生成追涨或同日买回指令。"
+  note: "30天目标只做进度校验；默认右侧趋势波段，10点后触发操作，超过3只先减弱换强。"
 };
 
 const stockRecommendationProfileOverrides = {
@@ -787,7 +796,7 @@ const defaultState = {
     familiarSectors: "半导体, 人工智能, 新能源"
   },
   riskPerTrade: 1.5,
-  maxPosition: 45,
+  maxPosition: 80,
   goal: {
     startAssets: 517260.42,
     currentAssets: 517260.42,
@@ -872,11 +881,13 @@ const defaultState = {
   },
   autoRefresh: {
     enabled: true,
-    intervalMinutes: 10,
+    scheduleTimes: ["08:00", "14:00"],
+    intervalMinutes: 0,
     lastAttemptAt: "",
     lastRunAt: "",
+    lastSlotKey: "",
     nextRunAt: "",
-    status: "等待自动刷新",
+    status: "等待08:00/14:00定时刷新",
     triggerCount: 0,
     triggered: []
   },
@@ -899,7 +910,8 @@ const defaultState = {
 };
 
 let state = loadState();
-const AUTO_REFRESH_DEFAULT_MINUTES = 10;
+const AUTO_REFRESH_SCHEDULE_TIMES = ["08:00", "14:00"];
+const AUTO_REFRESH_POLL_MS = 60 * 1000;
 let autoRefreshTimer = null;
 let autoRefreshRunning = false;
 
@@ -1052,13 +1064,16 @@ function mergeState(base, saved) {
     account.cashBalance = Math.max(0, numeric(goal.currentAssets) - positionMarketValue(positions));
     account.cashUpdatedAt = goal.lastUpdated || "自动推导";
   }
+  const mechanismUpgraded = (saved.tradeMechanism || {}).version !== base.tradeMechanism.version;
 
   return {
     ...structuredClone(base),
     ...saved,
+    maxPosition: mechanismUpgraded ? base.maxPosition : (numeric(saved.maxPosition) || base.maxPosition),
     profile: { ...base.profile, ...(saved.profile || {}) },
     goal,
     account,
+    tradeMechanism: { ...base.tradeMechanism, ...(mechanismUpgraded ? {} : (saved.tradeMechanism || {})) },
     thsConnection: { ...base.thsConnection, ...(saved.thsConnection || {}) },
     watchlist: Array.isArray(saved.watchlist) ? saved.watchlist : base.watchlist,
     positions,
@@ -1094,9 +1109,10 @@ function mergeState(base, saved) {
     autoRefresh: {
       ...base.autoRefresh,
       ...(saved.autoRefresh || {}),
-      intervalMinutes: numeric((saved.autoRefresh || {}).intervalMinutes) === 30
-        ? base.autoRefresh.intervalMinutes
-        : (numeric((saved.autoRefresh || {}).intervalMinutes) || base.autoRefresh.intervalMinutes)
+      scheduleTimes: Array.isArray((saved.autoRefresh || {}).scheduleTimes)
+        ? (saved.autoRefresh || {}).scheduleTimes
+        : base.autoRefresh.scheduleTimes,
+      intervalMinutes: 0
     },
     closeReviews: Array.isArray(saved.closeReviews) ? saved.closeReviews : base.closeReviews,
     journal: Array.isArray(saved.journal) ? saved.journal : base.journal,
@@ -2497,10 +2513,76 @@ function isTriggeredOrder(item) {
   return ["sell", "buy"].includes(item?.orderType);
 }
 
-function nextAutoRefreshLabel(minutes = AUTO_REFRESH_DEFAULT_MINUTES) {
-  const intervalMinutes = numeric(minutes) || AUTO_REFRESH_DEFAULT_MINUTES;
-  const date = new Date(Date.now() + intervalMinutes * 60 * 1000);
-  return date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
+function autoRefreshScheduleTimes() {
+  const saved = Array.isArray(state.autoRefresh?.scheduleTimes) ? state.autoRefresh.scheduleTimes : [];
+  return saved.length ? saved : AUTO_REFRESH_SCHEDULE_TIMES;
+}
+
+function isTradingWeekday(date = new Date()) {
+  const day = date.getDay();
+  return day >= 1 && day <= 5;
+}
+
+function isBeforeDefaultActionTime(date = new Date()) {
+  if (!isTradingWeekday(date)) return false;
+  const hm = date.getHours() * 100 + date.getMinutes();
+  return hm < 1000;
+}
+
+function ymdKey(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}${month}${day}`;
+}
+
+function scheduledDateForTime(baseDate, timeText) {
+  const [hour, minute] = String(timeText).split(":").map((item) => Number(item));
+  const date = new Date(baseDate);
+  date.setHours(Number.isFinite(hour) ? hour : 0, Number.isFinite(minute) ? minute : 0, 0, 0);
+  return date;
+}
+
+function nextAutoRefreshSlot(now = new Date()) {
+  const times = autoRefreshScheduleTimes();
+  for (let dayOffset = 0; dayOffset < 8; dayOffset += 1) {
+    const day = new Date(now);
+    day.setDate(now.getDate() + dayOffset);
+    if (!isTradingWeekday(day)) continue;
+    for (const timeText of times) {
+      const candidate = scheduledDateForTime(day, timeText);
+      if (candidate > now) {
+        return {
+          timeText,
+          date: candidate,
+          slotKey: `${ymdKey(candidate)}-${timeText}`
+        };
+      }
+    }
+  }
+  return null;
+}
+
+function dueAutoRefreshSlot(now = new Date()) {
+  if (!isTradingWeekday(now)) return null;
+  const todayKeyValue = ymdKey(now);
+  const lastSlotKey = state.autoRefresh?.lastSlotKey || "";
+  const due = autoRefreshScheduleTimes()
+    .map((timeText) => ({
+      timeText,
+      date: scheduledDateForTime(now, timeText),
+      slotKey: `${todayKeyValue}-${timeText}`
+    }))
+    .filter((slot) => now >= slot.date && slot.slotKey !== lastSlotKey)
+    .sort((a, b) => b.date - a.date);
+  return due[0] || null;
+}
+
+function nextAutoRefreshLabel() {
+  const slot = nextAutoRefreshSlot();
+  if (!slot) return "等待下个交易日";
+  const today = ymdKey(slot.date) === ymdKey(new Date());
+  return `${today ? "今日" : `${String(slot.date.getMonth() + 1).padStart(2, "0")}/${String(slot.date.getDate()).padStart(2, "0")}`} ${slot.timeText}`;
 }
 
 function autoRefreshTriggerSummary() {
@@ -2520,20 +2602,22 @@ function autoRefreshTriggerSummary() {
   }));
 }
 
-function updateAutoRefreshMeta(source = "manual") {
-  const intervalMinutes = numeric(state.autoRefresh?.intervalMinutes) || AUTO_REFRESH_DEFAULT_MINUTES;
-  const triggers = autoRefreshTriggerSummary();
+function updateAutoRefreshMeta(source = "manual", options = {}) {
+  const eligible = isAutoRefreshEligible();
+  const triggers = eligible ? autoRefreshTriggerSummary() : [];
   const now = nowLabel();
   state.autoRefresh = {
     ...state.autoRefresh,
     enabled: state.autoRefresh?.enabled !== false,
-    intervalMinutes,
+    scheduleTimes: autoRefreshScheduleTimes(),
+    intervalMinutes: 0,
     lastAttemptAt: now,
     lastRunAt: source === "auto" ? now : (state.autoRefresh?.lastRunAt || ""),
-    nextRunAt: nextAutoRefreshLabel(intervalMinutes),
+    lastSlotKey: source === "auto" ? (options.slotKey || state.autoRefresh?.lastSlotKey || "") : (state.autoRefresh?.lastSlotKey || ""),
+    nextRunAt: nextAutoRefreshLabel(),
     status: triggers.length
       ? `触发${triggers.length}条执行提醒`
-      : source === "auto" ? "自动刷新完成，暂无触发" : "行情已刷新，暂无触发",
+      : !eligible ? "等待今日持仓确认后定时刷新" : source === "auto" ? "定时刷新完成，暂无触发" : "行情已刷新，暂无触发",
     triggerCount: triggers.length,
     triggered: triggers
   };
@@ -2541,15 +2625,15 @@ function updateAutoRefreshMeta(source = "manual") {
 
 function renderAutoRefreshBanner(liveTriggers = []) {
   const auto = state.autoRefresh || {};
-  const intervalMinutes = numeric(auto.intervalMinutes) || AUTO_REFRESH_DEFAULT_MINUTES;
+  const schedule = (Array.isArray(auto.scheduleTimes) && auto.scheduleTimes.length ? auto.scheduleTimes : AUTO_REFRESH_SCHEDULE_TIMES).join("/");
   const triggers = liveTriggers.length ? liveTriggers : (Array.isArray(auto.triggered) ? auto.triggered : []);
   const count = triggers.length || numeric(auto.triggerCount);
   const enabled = auto.enabled !== false;
   const tone = count ? "danger" : enabled ? "ok" : "neutral";
-  const title = count ? `触发${count}条执行提醒` : enabled ? `每${intervalMinutes}分钟自动刷新已开启` : "自动刷新已关闭";
+  const title = count ? `触发${count}条执行提醒` : enabled ? `${schedule}定时刷新已开启` : "自动刷新已关闭";
   const detail = count
     ? triggers.slice(0, 4).map((item) => `${item.name}${item.command ? `：${item.command}` : ""}`).join("｜")
-    : `上次${auto.lastRunAt || auto.lastAttemptAt || "待刷新"}｜下次${auto.nextRunAt || nextAutoRefreshLabel(intervalMinutes)}｜页面打开时生效`;
+    : `上次${auto.lastRunAt || auto.lastAttemptAt || "待刷新"}｜下次${auto.nextRunAt || nextAutoRefreshLabel()}｜页面打开时生效`;
   return `
     <div class="auto-refresh-banner ${tone}">
       <div>
@@ -2801,6 +2885,23 @@ function buildHoldingAdvice(position, portfolio, snapshot = accountSnapshot()) {
     goalImpact: holdingGoalImpact(position, price, signalView.level === "danger" ? "sell" : "hold", snapshot)
   };
 
+  if (["亏损超5%风控", "盈利超20%保护"].includes(signalView.title)) {
+    const quantity = numeric(position.quantity);
+    const protectShares = signalView.title === "盈利超20%保护"
+      ? Math.max(100, roundLotDown(quantity / 2))
+      : quantity;
+    return {
+      ...base,
+      command: signalView.title === "盈利超20%保护" ? `减半${protectShares}股` : "减仓/清仓",
+      intent: "sell",
+      executePrice: "10:00后结合板块承接执行；若盘中继续走弱可直接按风控线处理",
+      riskPrice: signalView.title === "盈利超20%保护" ? "盈利超过20%保护线" : "亏损超过5%风控线",
+      targetPrice: "若后续一周仍有10%+空间且概率70%+，剩余仓位再继续趋势持有",
+      goalImpact: holdingGoalImpact(position, price, "sell", snapshot, protectShares),
+      rank: base.rank + 25
+    };
+  }
+
   if (code === "002156") {
     const intent = price < 70.8 ? "sell" : "hold";
     return {
@@ -2895,21 +2996,31 @@ function buildCandidateAdvice(candidate, row, portfolio, marketGate = marketGate
   const executionGate = row?.executionGate || candidateExecutionGate(candidate, signalView, quote, marketGate);
   const price = quote ? numeric(quote.price) : 0;
   const shares = row ? row.shares : 0;
-  const activeBuy = signalView.level === "ok" && executionGate.ok && shares > 0;
+  const maxStocks = numeric(tradeMechanismPolicy.maxActiveStocks, 3);
+  const portfolioFull = activePositions().length >= maxStocks && !candidate.exceptional;
+  const beforeDefaultActionTime = isBeforeDefaultActionTime() && !candidate.allowBeforeTen;
+  const activeBuy = signalView.level === "ok" && executionGate.ok && shares > 0 && !portfolioFull && !beforeDefaultActionTime;
   const marketBlocked = signalView.level === "ok" && !marketGate.canOpenNew;
-  const avoid = marketBlocked || executionGate.level === "cooldown" || signalView.level === "danger" || ["禁止", "先减", "不加", "失效"].some((keyword) => signalView.title.includes(keyword));
+  const avoid = marketBlocked || portfolioFull || beforeDefaultActionTime || executionGate.level === "cooldown" || signalView.level === "danger" || ["禁止", "先减", "不加", "失效"].some((keyword) => signalView.title.includes(keyword));
   const rank = activeBuy ? 90 + candidateUniverseScore(candidate) * 0.1 : avoid ? 45 : candidateUniverseScore(candidate);
+  const gateText = portfolioFull
+    ? `持仓已达${maxStocks}只上限，新增必须先替换弱票。`
+    : beforeDefaultActionTime
+      ? "10:00前原则上不触发买入，除非预设开盘抢筹规则。"
+      : "";
   return {
     group: candidate.scope || "全局埋伏",
     name: candidate.name,
     code: candidate.code,
     priceText: quote ? `现价${formatPrice(price)}` : "待刷新",
-    command: activeBuy ? `买${shares}股` : executionGate.level === "cooldown" ? "冷却观察" : marketBlocked ? "市场不买" : avoid ? "今天不买" : "等三确认",
+    command: activeBuy ? `买${shares}股` : executionGate.level === "cooldown" ? "冷却观察" : marketBlocked ? "市场不买" : portfolioFull ? "先减弱票" : beforeDefaultActionTime ? "10点后再判定" : avoid ? "今天不买" : "等三确认",
     level: activeBuy ? "ok" : avoid ? "watch" : "neutral",
     intent: activeBuy ? "buy" : avoid ? "avoid" : "hold",
     reason: activeBuy
       ? `${signalView.detail} ${executionGate.detail}。预算约${formatMoney(row.capital)}。`
-      : marketBlocked
+      : gateText
+        ? `${gateText} ${signalView.detail} ${candidate.reason}`
+        : marketBlocked
         ? `${marketGate.title}：${marketGate.detail}`
         : `${executionGate.label}：${executionGate.detail}。${signalView.detail} ${candidate.reason}`,
     executePrice: candidate.trigger,
@@ -3872,28 +3983,28 @@ function exposureScenarios(goal, portfolio, cash, marketGate = marketGateView())
   const snapshot = accountSnapshot(portfolio.marketValue);
   return [
     {
-      label: "防守验证",
-      exposure: 35,
+      label: "空仓等待",
+      exposure: 0,
       level: "neutral",
-      gate: "只在指数止跌、持仓未破硬线时提高。"
+      gate: "大盘趋势不好且没有机会时，允许果断空仓等待。"
     },
     {
-      label: "第一阶段上限",
-      exposure: 45,
+      label: "中等预期",
+      exposure: 35,
       level: "ok",
-      gate: "适合玻璃基板/TGV或先进封装出现明确触发。"
+      gate: "大盘趋势好但个股空间中等，仓位维持3-5成。"
     },
     {
-      label: "强确认进攻",
-      exposure: 70,
+      label: "波段进攻",
+      exposure: 50,
       level: "watch",
-      gate: "需要科技主线两个以上分支共振，且盈利仓提供缓冲。"
+      gate: "右侧趋势确认、板块前排股共振时使用，不追左侧下跌。"
     },
     {
-      label: "极高确定性",
+      label: "强趋势高预期",
       exposure: 80,
       level: "danger",
-      gate: "仅用于80%+确定性且止损很近的机会，不给普通反弹。"
+      gate: "仅用于大盘趋势好、个股高空间且止损很近的机会。"
     }
   ].map((scenario) => {
     const targetValue = snapshot.activeAssets * scenario.exposure / 100;
@@ -3977,7 +4088,7 @@ function buildSizingVerdict(goal, portfolio, cash, marketGate = marketGateView()
   }
   if (!marketGate.canOpenNew) {
     return {
-      title: "市场未允许进攻",
+      title: "市场未允许进攻，可空仓等待",
       detail: `${marketGate.detail} 当前现金保留，新仓不生成买入股数。`
     };
   }
@@ -4122,9 +4233,12 @@ function portfolioStats() {
   const maxWeight = weights.length ? Math.max(...weights) : 0;
   const lossCount = state.positions.filter((item) => numeric(item.pnl) < 0).length;
   const concentrationPenalty = maxWeight > 0.35 ? 18 : maxWeight > 0.25 ? 10 : 0;
+  const countPenalty = state.positions.length > tradeMechanismPolicy.maxActiveStocks
+    ? (state.positions.length - tradeMechanismPolicy.maxActiveStocks) * 12
+    : 0;
   const lossPenalty = lossCount * 4;
   const fitBonus = state.positions.reduce((sum, item) => sum + matchedTrackScore(`${item.name}${item.code}`), 0) / Math.max(1, state.positions.length);
-  const score = Math.round(clamp(72 + fitBonus * 0.18 - concentrationPenalty - lossPenalty, 0, 99));
+  const score = Math.round(clamp(72 + fitBonus * 0.18 - concentrationPenalty - countPenalty - lossPenalty, 0, 99));
   const verdict = score >= 78 ? "结构可持" : score >= 62 ? "需要优化" : "必须收缩";
 
   return {
@@ -4238,7 +4352,7 @@ function renderAdvice() {
     },
     {
       title: `纪律提醒：${riskText}`,
-      text: `单笔风险控制在 ${state.riskPerTrade}% 附近，最大仓位 ${state.maxPosition}%。优先选择你熟悉的 ${familiar}。`
+      text: `单笔风险控制在 ${state.riskPerTrade}% 附近，常态最多3只股；弱市可空仓，好行情中等预期3-5成，高预期强趋势最多8成。优先选择你熟悉的 ${familiar}。`
     }
   ];
 
@@ -4402,7 +4516,7 @@ function refreshPublicQuotes(options = {}) {
 	      updateQuoteGateMeta();
 	      applyQuotesToPositions(quotes);
       updateEstimatedAccountMeta();
-      updateAutoRefreshMeta(source);
+      updateAutoRefreshMeta(source, options);
       render();
     })
     .catch((error) => {
@@ -4410,8 +4524,9 @@ function refreshPublicQuotes(options = {}) {
       state.autoRefresh = {
         ...state.autoRefresh,
         lastAttemptAt: nowLabel(),
-        nextRunAt: nextAutoRefreshLabel(numeric(state.autoRefresh?.intervalMinutes) || AUTO_REFRESH_DEFAULT_MINUTES),
-        status: source === "auto" ? `自动刷新失败：${error.message || "网络不可用"}` : (state.autoRefresh?.status || "等待自动刷新")
+        lastSlotKey: source === "auto" ? (options.slotKey || state.autoRefresh?.lastSlotKey || "") : (state.autoRefresh?.lastSlotKey || ""),
+        nextRunAt: nextAutoRefreshLabel(),
+        status: source === "auto" ? `定时刷新失败：${error.message || "网络不可用"}` : (state.autoRefresh?.status || "等待自动刷新")
       };
       renderQuoteStatus();
       saveState();
@@ -4447,28 +4562,54 @@ function isAutoRefreshEligible() {
 
 function startAutoRefreshLoop() {
   if (autoRefreshTimer) return;
-  const intervalMinutes = numeric(state.autoRefresh?.intervalMinutes) || AUTO_REFRESH_DEFAULT_MINUTES;
   state.autoRefresh = {
     ...state.autoRefresh,
     enabled: state.autoRefresh?.enabled !== false,
-    intervalMinutes,
-    nextRunAt: state.autoRefresh?.nextRunAt || nextAutoRefreshLabel(intervalMinutes)
+    scheduleTimes: autoRefreshScheduleTimes(),
+    intervalMinutes: 0,
+    nextRunAt: state.autoRefresh?.nextRunAt || nextAutoRefreshLabel(),
+    status: isAutoRefreshEligible()
+      ? (state.autoRefresh?.status || "等待08:00/14:00定时刷新")
+      : "等待今日持仓确认后定时刷新",
+    triggerCount: isAutoRefreshEligible() ? (state.autoRefresh?.triggerCount || 0) : 0,
+    triggered: isAutoRefreshEligible() ? (state.autoRefresh?.triggered || []) : []
   };
+  saveState();
   autoRefreshTimer = window.setInterval(() => {
     runAutoRefreshTick();
-  }, intervalMinutes * 60 * 1000);
+  }, AUTO_REFRESH_POLL_MS);
+  runAutoRefreshTick();
 }
 
 async function runAutoRefreshTick() {
   if (autoRefreshRunning) return;
-  const intervalMinutes = numeric(state.autoRefresh?.intervalMinutes) || AUTO_REFRESH_DEFAULT_MINUTES;
+  const dueSlot = dueAutoRefreshSlot();
+  if (!dueSlot) {
+    const eligible = isAutoRefreshEligible();
+    state.autoRefresh = {
+      ...state.autoRefresh,
+      scheduleTimes: autoRefreshScheduleTimes(),
+      nextRunAt: nextAutoRefreshLabel(),
+      status: eligible ? (state.autoRefresh?.status || "等待08:00/14:00定时刷新") : "等待今日持仓确认后定时刷新",
+      triggerCount: eligible ? state.autoRefresh?.triggerCount || 0 : 0,
+      triggered: eligible ? (state.autoRefresh?.triggered || []) : []
+    };
+    saveState();
+    render();
+    return;
+  }
   if (!isAutoRefreshEligible()) {
     state.autoRefresh = {
       ...state.autoRefresh,
+      scheduleTimes: autoRefreshScheduleTimes(),
       lastAttemptAt: nowLabel(),
-      nextRunAt: nextAutoRefreshLabel(intervalMinutes),
-      status: "等待今日持仓确认后自动刷新"
+      lastSlotKey: dueSlot.slotKey,
+      nextRunAt: nextAutoRefreshLabel(),
+      status: "等待今日持仓确认后定时刷新",
+      triggerCount: 0,
+      triggered: []
     };
+    saveState();
     render();
     return;
   }
@@ -4476,13 +4617,15 @@ async function runAutoRefreshTick() {
   autoRefreshRunning = true;
   state.autoRefresh = {
     ...state.autoRefresh,
+    scheduleTimes: autoRefreshScheduleTimes(),
     lastAttemptAt: nowLabel(),
-    status: "自动刷新中"
+    lastSlotKey: dueSlot.slotKey,
+    status: `${dueSlot.timeText}定时刷新中`
   };
   render();
 
   try {
-    await syncLatestData({ source: "auto" });
+    await syncLatestData({ source: "auto", slotKey: dueSlot.slotKey });
   } finally {
     autoRefreshRunning = false;
   }
@@ -4602,6 +4745,8 @@ function updateEstimatedAccountMeta() {
 function evaluatePositionSignal(position, quote) {
   const price = quote ? numeric(quote.price) : numeric(position.currentPrice);
   const code = normalizeCode(position.code);
+  const disciplineSignal = positionDisciplineSignal(position, price);
+  if (disciplineSignal) return disciplineSignal;
 
   if (code === "002156") {
     if (price < 68.2) return signal("danger", "清仓线触发", "通富微电跌破68.2，按原计划优先清掉剩余风险仓。");
@@ -4634,6 +4779,29 @@ function evaluatePositionSignal(position, quote) {
   }
 
   return signal("neutral", "按手动计划", "未配置专属硬线，参考持仓里的止损和触发条件。");
+}
+
+function positionDisciplineSignal(position, price) {
+  const cost = numeric(position.cost);
+  const currentPrice = numeric(price) || numeric(position.currentPrice);
+  const pnlRate = cost > 0 && currentPrice > 0
+    ? (currentPrice - cost) / cost * 100
+    : numeric(position.pnlRate);
+  if (pnlRate <= tradeMechanismPolicy.lossReviewPct) {
+    return signal(
+      "danger",
+      "亏损超5%风控",
+      `当前亏损约${formatSigned(pnlRate)}%，按纪律开始减仓/清仓评估；除非赛道、量价和催化同时出现明确反转。`
+    );
+  }
+  if (pnlRate >= tradeMechanismPolicy.profitHalfProtectPct) {
+    return signal(
+      "danger",
+      "盈利超20%保护",
+      `当前盈利约${formatSigned(pnlRate)}%，原则上先减半保护利润；只有未来一周10%以上空间且概率超过70%才继续满仓位拿。`
+    );
+  }
+  return null;
 }
 
 function evaluateCandidateSignal(item, quote) {

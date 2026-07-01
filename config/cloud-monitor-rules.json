@@ -1,12 +1,29 @@
 {
   "tradeMechanism": {
-    "mode": "cadence_repair",
+    "mode": "focused_right_side_swing",
     "sameDayRebuyBlocked": true,
     "fullExitCoolingTradingDays": 1,
     "buyRequiresThreeConfirmations": true,
     "cloudIsPriceAlertOnly": true,
     "defaultBuyAlertLevel": "watch",
-    "note": "云端只做公开行情触发提醒，不做完整AI判断；买入必须已有明确三确认规则且不在冷却期。"
+    "note": "云端只做公开行情触发提醒，不做完整AI判断；08:00只做盘前刷新/记录，14:00可发送真实触发提醒；买入必须已有明确三确认规则且不在冷却期。",
+    "maxActiveStocks": 3,
+    "maxSectorTracks": 3,
+    "scheduleTimes": [
+      "08:00",
+      "14:00"
+    ],
+    "premarketSendAlerts": false,
+    "defaultTradeDirection": "right_side_trend_swing",
+    "actionAdviceAfter": "10:00",
+    "weakMarketDefaultExposure": 0,
+    "mediumUpsideExposureRange": "30%-50%",
+    "highUpsideMaxExposure": 80,
+    "lossReviewPct": -5,
+    "profitHalfProtectPct": 20,
+    "preferFrontRankLeaders": true,
+    "preferWronglySoldQualityStocks": true,
+    "newsReactionRule": "利好兑现提示卖出，利空出尽结合反转信号提示建仓"
   },
   "cooldowns": {
     "000021": {
@@ -72,5 +89,5 @@
   "candidates": [],
   "maxCandidateAlerts": 0,
   "maxNewBuyBudget": 0,
-  "note": "2026-07-01 收盘机制纠偏：卖出后冷却，云端不触发买入邮件，买入需市场/赛道/个股三确认。"
+  "note": "2026-07-02 规则更新：聚焦最多3只持仓，默认右侧趋势波段；云端改为交易日08:00/14:00两次，08:00不发送生产买卖邮件。"
 }

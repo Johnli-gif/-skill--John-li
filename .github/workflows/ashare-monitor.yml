@@ -37,13 +37,9 @@ on:
           - "true"
   schedule:
     # GitHub Actions cron uses UTC. These schedules map to Beijing time:
-    # 09:25-11:35 and 12:55-15:05, every 10 minutes on weekdays.
-    - cron: "25,35,45,55 1 * * 1-5"
-    - cron: "5,15,25,35,45,55 2 * * 1-5"
-    - cron: "5,15,25,35 3 * * 1-5"
-    - cron: "55 4 * * 1-5"
-    - cron: "5,15,25,35,45,55 5-6 * * 1-5"
-    - cron: "5 7 * * 1-5"
+    # 08:00 and 14:00 on trading weekdays. GitHub may delay scheduled runs.
+    - cron: "0 0 * * 1-5"
+    - cron: "0 6 * * 1-5"
 
 permissions:
   contents: read
@@ -116,7 +112,7 @@ jobs:
           payload = {
               "token": token,
               "title": "A股监控通道测试",
-              "content": "财经热点分析云端监控已连接。后续交易时段每10分钟检查行情，触发交易条件时推送提醒。",
+              "content": "财经热点分析云端监控已连接。后续每个交易日北京08:00和14:00检查行情；08:00只做盘前刷新/记录，14:00若触发交易条件才推送提醒。",
               "template": "markdown",
           }
           req = urllib.request.Request(

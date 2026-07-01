@@ -1,9 +1,9 @@
 [Unit]
-Description=Run A-share cloud monitor every 10 minutes
+Description=Run A-share cloud monitor at 08:00 and 14:00 on trading weekdays
 
 [Timer]
-OnBootSec=2min
-OnUnitActiveSec=10min
+OnCalendar=Mon..Fri 08:00
+OnCalendar=Mon..Fri 14:00
 Persistent=true
 Unit=ashare-monitor.service
 

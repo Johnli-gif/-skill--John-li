@@ -95,6 +95,19 @@ def is_trading_time(dt: datetime | None = None) -> bool:
     return 925 <= hm <= 1135 or 1255 <= hm <= 1505
 
 
+def is_scheduled_checkpoint(dt: datetime | None = None) -> bool:
+    dt = dt or now()
+    if dt.weekday() >= 5:
+        return False
+    hm = dt.hour * 100 + dt.minute
+    return 755 <= hm <= 805 or 1355 <= hm <= 1405
+
+
+def can_send_production_alerts(dt: datetime | None = None) -> bool:
+    """Avoid sending trade emails from stale pre-market quote snapshots."""
+    return is_trading_time(dt)
+
+
 def normalize_code(code: str) -> str:
     code = re.sub(r"\D", "", str(code or ""))
     return code.zfill(6)[-6:]
@@ -642,8 +655,10 @@ def main() -> int:
     parser.add_argument("--ignore-trading-time", action="store_true", help="run outside A-share trading hours")
     args = parser.parse_args()
 
-    if env("TRADE_HOURS_ONLY", "true").lower() != "false" and not args.ignore_trading_time and not is_trading_time():
-        print(f"[{now_label()}] 非A股交易时段，跳过。")
+    trading_now = is_trading_time()
+    checkpoint_now = is_scheduled_checkpoint()
+    if env("TRADE_HOURS_ONLY", "true").lower() != "false" and not args.ignore_trading_time and not trading_now and not checkpoint_now:
+        print(f"[{now_label()}] 非A股交易时段且非08:00/14:00检查点，跳过。")
         return 0
 
     panel_path = Path(env("PANEL_SYNC_PATH", str(PANEL_SYNC))).expanduser()
@@ -667,6 +682,10 @@ def main() -> int:
     print(f"[{now_label()}] {gate['title']} {gate['metrics']} alerts={len(alerts)}")
     for alert in alerts:
         print(f"- {alert.level} {alert.name} {alert.code} {alert.price:.2f}: {alert.action}")
+
+    if not can_send_production_alerts() and not args.force and not args.dry_run:
+        print(f"[{now_label()}] 非连续竞价交易时段，本次仅刷新/记录，不发送生产买卖邮件。")
+        return 0
 
     if not should_send(alerts, state_path, quiet_minutes, args.force):
         return 0
