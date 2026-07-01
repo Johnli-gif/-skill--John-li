@@ -134,33 +134,61 @@ def fetch_tencent_quotes(codes: list[str]) -> dict[str, dict[str, Any]]:
     symbols.extend(symbol for symbol in INDEX_SYMBOLS if symbol not in symbols)
     if not symbols:
         return {}
-    raw = http_get(f"https://qt.gtimg.cn/q={','.join(symbols)}&_={int(time.time() * 1000)}")
     quotes: dict[str, dict[str, Any]] = {}
-    for match in re.finditer(r'v_([^=]+)="([^"]*)";', raw):
-        symbol, body = match.group(1), match.group(2)
-        parts = body.split("~")
-        if len(parts) < 35:
+    chunk_size = 4
+    def fetch_raw(chunk: list[str], attempts: int = 3) -> tuple[str, Exception | None]:
+        raw = ""
+        last_error: Exception | None = None
+        for _attempt in range(attempts):
+            query = f"q={','.join(chunk)}&_={int(time.time() * 1000)}"
+            for scheme in ("https", "http"):
+                try:
+                    raw = http_get(f"{scheme}://qt.gtimg.cn/{query}")
+                    return raw, None
+                except Exception as exc:
+                    last_error = exc
+            time.sleep(0.4)
+        return raw, last_error
+
+    for start in range(0, len(symbols), chunk_size):
+        chunk = symbols[start:start + chunk_size]
+        raw, last_error = fetch_raw(chunk)
+        if not raw:
+            raw_parts = []
+            for symbol in chunk:
+                symbol_raw, last_error = fetch_raw([symbol], attempts=2)
+                if symbol_raw:
+                    raw_parts.append(symbol_raw)
+                else:
+                    print(f"[WARN] quote symbol failed {symbol}: {last_error}", file=sys.stderr)
+            raw = "".join(raw_parts)
+        if not raw:
             continue
-        code = normalize_code(parts[2] or symbol)
-        price = numeric(parts[3])
-        if not code or price <= 0:
-            continue
-        quote = {
-            "symbol": symbol,
-            "code": code,
-            "name": parts[1] or code,
-            "price": price,
-            "prevClose": numeric(parts[4]),
-            "open": numeric(parts[5]),
-            "time": parts[30] or "",
-            "change": numeric(parts[31]),
-            "pct": numeric(parts[32]),
-            "high": numeric(parts[33]),
-            "low": numeric(parts[34]),
-        }
-        quotes[code] = quote
-        if symbol in INDEX_SYMBOLS:
-            quotes[symbol] = quote
+        for match in re.finditer(r'v_([^=]+)="([^"]*)";', raw):
+            symbol, body = match.group(1), match.group(2)
+            parts = body.split("~")
+            if len(parts) < 35:
+                continue
+            code = normalize_code(parts[2] or symbol)
+            price = numeric(parts[3])
+            if not code or price <= 0:
+                continue
+            quote = {
+                "symbol": symbol,
+                "code": code,
+                "name": parts[1] or code,
+                "price": price,
+                "prevClose": numeric(parts[4]),
+                "open": numeric(parts[5]),
+                "time": parts[30] or "",
+                "change": numeric(parts[31]),
+                "pct": numeric(parts[32]),
+                "high": numeric(parts[33]),
+                "low": numeric(parts[34]),
+            }
+            quotes[code] = quote
+            if symbol in INDEX_SYMBOLS:
+                quotes[symbol] = quote
     return quotes
 
 
