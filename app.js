@@ -199,8 +199,8 @@ const latestKnownPositions = [
     marketValue: 19900,
     pnl: 2394.8,
     stop: "跌破188不加；跌破183处理",
-    trigger: "186-190企稳或站稳200可加100股",
-    plan: "最强持有，按触发试加"
+    trigger: "卖出或减仓当天禁止买回；次日后再看市场、赛道、个股三确认",
+    plan: "战术仓冷却观察，不因单价回到区间自动加回"
   }
 ];
 
@@ -268,22 +268,22 @@ const defaultBuyCandidates = [
     code: "300776",
     track: "玻璃基板/TGV设备",
     priority: "第一优先",
-    budget: "约1.9万-2.1万，100股",
+    budget: "冷却后再评估，未三确认不生成买入预算",
     capitalMin: 19000,
     capitalMax: 21000,
     entryLow: 186,
     entryHigh: 200,
     stopPrice: 183,
     noChasePrice: 205,
-    trigger: "回踩186-190企稳，或放量站稳200。",
-    noChase: "205以上不追，只等回踩或次日确认。",
-    stop: "跌破183处理；跌破188不加仓。",
-    target: "205/215/225分批跟踪，强势用移动止盈。",
+    trigger: "减仓/卖出当天禁止买回；冷却期后需市场、玻璃基板/TGV赛道和个股量价三确认。",
+    noChase: "不做同日回补；205以上不追，只等次日后重新确认。",
+    stop: "跌破198处理战术仓；跌破183说明中期结构失效。",
+    target: "212收回才恢复趋势观察，222以上再看移动止盈。",
     probability: 58,
     expectedMove: "-5%至+16%",
     scope: "持仓联动",
     tags: ["玻璃基板", "TGV", "设备", "科技"],
-    reason: "现有持仓已有盈利，且玻璃基板方向相对抗跌，适合作为科技修复核心观察。"
+    reason: "当前作为战术观察仓，不再按单一价位自动加回；只有冷却期结束且三确认同时成立才重新进入买入清单。"
   },
   {
     id: "lens-tech",
@@ -474,6 +474,15 @@ const positionTrackTagMap = {
 };
 
 const broadConflictTags = new Set(["科技", "设备", "材料", "防守", "国产替代"]);
+
+const tradeMechanismPolicy = {
+  version: "2026-07-01-cadence-repair",
+  defaultMode: "赛道埋伏+趋势持有",
+  sameDayRebuyBlocked: true,
+  fullExitCoolingTradingDays: 1,
+  buyGateLabels: ["市场闸门", "赛道确认", "个股量价"],
+  note: "30天目标只做进度校验，不直接生成追涨或同日买回指令。"
+};
 
 const stockRecommendationProfileOverrides = {
   "000021": { heat: "当下热门赛道", valuation: "正常估值", risk: "中风险", oneMonthMove: "-6%至+12%", holdingDays: "5-10天" },
@@ -863,6 +872,10 @@ const defaultState = {
     status: "等待自动刷新",
     triggerCount: 0,
     triggered: []
+  },
+  tradeMechanism: {
+    ...tradeMechanismPolicy,
+    lastReviewAt: "2026-07-01"
   },
   closeReviews: [],
   journal: [
@@ -1308,6 +1321,7 @@ function sectorPrepositionRadarItems(marketGate = marketGateView()) {
       amountTotal,
       turnoverAvg,
       breadth,
+      weakCount,
       score,
       level,
       action,
@@ -1348,7 +1362,9 @@ function battleDataGateStatus() {
   const dateKey = todayKey();
   const hasPositions = state.positions.length > 0;
   const currentPositionSignature = positionTableSignature();
-  const hasScreenshot = Boolean(state.thsConnection.screenshotDataUrl) && state.decisionGate.screenshotDateKey === dateKey;
+  const hasScreenshotImage = Boolean(state.thsConnection.screenshotDataUrl);
+  const hasScreenshotEvidence = Boolean(state.thsConnection.screenshotDataUrl || state.thsConnection.screenshotName);
+  const hasScreenshot = hasScreenshotEvidence && state.decisionGate.screenshotDateKey === dateKey;
   const hasImport = hasPositions && state.thsConnection.lastImportAt && state.decisionGate.importDateKey === dateKey;
   const hasPositionConfirm = hasImport
     && state.decisionGate.positionConfirmDateKey === dateKey
@@ -1357,15 +1373,16 @@ function battleDataGateStatus() {
   const tradeSnapshot = todayTradeSnapshot();
   const todayTrades = Array.isArray(tradeSnapshot.trades) ? tradeSnapshot.trades : [];
   const hasTradeSnapshot = hasTradeEvidence(tradeSnapshot, dateKey);
-  const screenshotOnly = Boolean(state.thsConnection.screenshotDataUrl) && !hasPositions;
+  const screenshotOnly = hasScreenshotImage && !hasPositions;
   const ready = Boolean(hasScreenshot && hasImport && hasPositionConfirm && hasQuotes);
   const blockReason = buildDataGateBlockReason({ hasPositions, hasScreenshot, hasImport, hasPositionConfirm, hasQuotes, screenshotOnly });
   return {
     ready,
     blockReason,
 	    dateKey,
-	    hasPositions,
-	    hasScreenshot,
+    hasPositions,
+    hasScreenshot,
+    hasScreenshotImage,
     hasImport,
     hasPositionConfirm,
     hasQuotes,
@@ -1395,7 +1412,7 @@ function battleDataGateStatus() {
         : "无持仓表",
     screenshotText: hasScreenshot
       ? `${state.thsConnection.screenshotName || "持仓截图"}｜${state.decisionGate.screenshotConfirmedAt || state.thsConnection.screenshotImportedAt}`
-      : state.thsConnection.screenshotDataUrl
+      : hasScreenshotEvidence
         ? `${state.thsConnection.screenshotName || "持仓截图"}｜需今天重新确认`
       : "未上传截图",
     tradeText: hasTradeSnapshot
@@ -1448,7 +1465,7 @@ function renderBattleDataGate(gate) {
 	          <span>导入成交截图</span>
 	          <input id="battleTradeSnapshotImage" type="file" accept="image/png,image/jpeg,image/webp">
 	        </label>
-	        <button class="ghost-button" type="button" data-battle-action="ocr-screenshot" ${gate.hasScreenshot ? "" : "disabled"}>识别截图生成持仓表</button>
+		        <button class="ghost-button" type="button" data-battle-action="ocr-screenshot" ${gate.hasScreenshotImage ? "" : "disabled"}>识别截图生成持仓表</button>
 	        <button class="primary-button" type="button" data-battle-action="refresh-quotes">一键刷新数据</button>
 	      </div>
       </div>
@@ -1922,6 +1939,114 @@ function todayActionFeedbackSummary() {
   return { items, filled, executed, partial, noTrigger, skipped };
 }
 
+function todayTradesForCode(code) {
+  const normalized = normalizeCode(code);
+  const trades = state.intraday?.tradeSnapshot?.trades || [];
+  return trades.filter((trade) => normalizeCode(trade.code) === normalized);
+}
+
+function todaySellTradesForCode(code) {
+  return todayTradesForCode(code).filter((trade) => /卖|减|清/.test(String(trade.action || "")) && numeric(trade.quantity) > 0);
+}
+
+function coolingStatusForCode(code) {
+  const sells = todaySellTradesForCode(code);
+  if (!sells.length) {
+    return { blocked: false, label: "无冷却", detail: "今日未记录卖出或减仓。" };
+  }
+  const shares = sells.reduce((sum, trade) => sum + numeric(trade.quantity), 0);
+  const avgPrice = sells.reduce((sum, trade) => sum + numeric(trade.price) * numeric(trade.quantity), 0) / Math.max(1, shares);
+  return {
+    blocked: true,
+    label: "冷却观察",
+    detail: `今日已卖出/减仓${shares}股，均价约${formatPrice(avgPrice)}；当天不买回，次日以后需市场、赛道、个股三确认。`
+  };
+}
+
+function positionTypeFor(position) {
+  if (position.positionType) return position.positionType;
+  const code = normalizeCode(position.code);
+  if (["600276", "600406"].includes(code)) return "核心趋势仓";
+  if (["300776", "300433", "002185"].includes(code)) return "战术观察仓";
+  return "观察仓";
+}
+
+function positionHoldingPeriodFor(position) {
+  const type = positionTypeFor(position);
+  if (type === "核心趋势仓") return "5-20个交易日";
+  if (type === "战术试错仓") return "1-5个交易日";
+  return "观察确认后再延长";
+}
+
+function sectorGateForCandidate(candidate, marketGate = marketGateView()) {
+  const normalized = normalizeCode(candidate.code);
+  const items = sectorPrepositionRadarItems(marketGate);
+  const matched = items.find((track) => {
+    const candidates = (track.candidates || []).map(normalizeCode);
+    const text = `${track.track}${track.thesis}${track.status}${candidate.track}${candidateTrackTokens(candidate).join("")}`;
+    return candidates.includes(normalized)
+      || candidateTrackTokens(candidate).some((token) => text.includes(token));
+  });
+  if (!matched) {
+    return { ok: false, label: "赛道未确认", detail: "未在全行业赛道探针中形成对应强势分支。" };
+  }
+  const ok = matched.score >= 72 && matched.breadth >= 0.45 && matched.weakCount !== matched.quotedCount;
+  return {
+    ok,
+    label: ok ? "赛道确认" : "赛道待确认",
+    detail: `${matched.track}评分${matched.score}，上涨广度${Math.round(matched.breadth * 100)}%，均涨跌${formatSigned(matched.avgPct)}%。`
+  };
+}
+
+function stockGateForCandidate(candidate, signalView, quote) {
+  if (!quote) return { ok: false, label: "个股待刷新", detail: "缺少个股公开行情，不能生成买入。" };
+  const pct = numeric(quote.pct);
+  const amount = numeric(quote.amount);
+  const turnover = numeric(quote.turnover);
+  const ok = signalView.level === "ok" && pct <= numeric(candidate.noChasePct || 5) && pct > -4.5;
+  const evidence = [
+    `涨跌${formatSigned(pct)}%`,
+    amount ? `成交额${formatMoney(amount)}` : "",
+    turnover ? `换手${formatSigned(turnover)}%` : ""
+  ].filter(Boolean).join("｜");
+  return {
+    ok,
+    label: ok ? "个股确认" : "个股待确认",
+    detail: evidence || signalView.detail
+  };
+}
+
+function candidateExecutionGate(candidate, signalView, quote, marketGate = marketGateView()) {
+  const cooldown = coolingStatusForCode(candidate.code);
+  if (cooldown.blocked) {
+    return {
+      ok: false,
+      level: "cooldown",
+      label: "冷却观察",
+      detail: cooldown.detail,
+      gates: [
+        { label: "冷却期", ok: false, detail: cooldown.detail }
+      ]
+    };
+  }
+  const market = {
+    label: marketGate.canOpenNew ? "市场闸门确认" : "市场闸门未开",
+    ok: Boolean(marketGate.canOpenNew),
+    detail: marketGate.detail
+  };
+  const sector = sectorGateForCandidate(candidate, marketGate);
+  const stock = stockGateForCandidate(candidate, signalView, quote);
+  const gates = [market, sector, stock];
+  const ok = gates.every((gate) => gate.ok);
+  return {
+    ok,
+    level: ok ? "confirmed" : "watch",
+    label: ok ? "三确认通过" : "三确认不足",
+    detail: gates.map((gate) => `${gate.label}:${gate.ok ? "通过" : "未过"}`).join("｜"),
+    gates
+  };
+}
+
 function renderMajorInfoPreview(gate, portfolio = portfolioStats()) {
   const items = rankedMajorInfoItems(gate, portfolio);
   const marketDataReady = gate?.ready;
@@ -2271,15 +2396,15 @@ function buildTodayOrdersSummary(sellCount, buyCount, sellTotal, buyTotal, snaps
     return `今天先处理${sellCount}条卖出/减仓线，释放资金后等指数确认再决定是否开新仓。卖出参考金额约${formatMoney(sellTotal)}。`;
   }
   if (sellCount === 0 && buyCount > 0) {
-    return `今天有${buyCount}条候选触发，按触发价和风险预算小仓执行；买入参考金额约${formatMoney(buyTotal)}。`;
+    return `今天有${buyCount}条候选通过三确认，按触发价和风险预算小仓执行；买入参考金额约${formatMoney(buyTotal)}。`;
   }
   if (sellCount > 0 && buyCount > 0) {
-    return `今天先卖${sellCount}条，再按${buyCount}条触发价小仓接回；释放资金约${formatMoney(sellTotal)}，计划投入约${formatMoney(buyTotal)}。`;
+    return `今天先处理${sellCount}条卖出/减仓线；买入只执行非冷却标的且三确认通过的${buyCount}条，释放资金约${formatMoney(sellTotal)}，计划投入约${formatMoney(buyTotal)}。`;
   }
   if (snapshot.floorGap <= 8000) {
     return `距离8%防守线只剩${formatMoney(snapshot.floorGap)}，今天以防守为主，不新增进攻仓。`;
   }
-  return "今天按触发价执行，不到价不动；候选股未到触发区继续等待。";
+  return "今天按触发价和三确认执行，不到条件不动；候选股只观察，不因目标压力追买。";
 }
 
 function buildCurrentTodayOrders() {
@@ -2475,7 +2600,7 @@ function renderTodayOrderRow(item) {
 function buildTodayAdviceTitle(sellCount, buyCount, noBuyCount, portfolio, path, marketGate) {
   if (sellCount) return "先卖触线风险仓，新仓暂缓";
   if (!marketGate.canOpenNew) return "市场闸门未开，新仓暂停";
-  if (buyCount) return "有触发买点，按股数小仓执行";
+  if (buyCount) return "三确认通过才小仓试错";
   if (path.gap < -5000) return "落后路径，但今天不追高";
   if (!portfolio.positions) return "先导入持仓，候选股只按价位埋伏";
   if (noBuyCount >= 2) return "持仓照硬线，新仓大多不到价";
@@ -2484,13 +2609,13 @@ function buildTodayAdviceTitle(sellCount, buyCount, noBuyCount, portfolio, path,
 
 function buildTodayAdviceDetail(stats, portfolio, snapshot, path, sellCount, buyCount, marketGate) {
   if (sellCount) {
-    return `持仓已触发或接近硬卖线，先降低亏损仓和利润回撤风险；${marketGate.canOpenNew ? "卖完后再看全局候选池是否有真正触发买点。" : `${marketGate.title}，卖完也不立刻开新仓。`}`;
+    return `持仓已触发或接近硬卖线，先降低亏损仓和利润回撤风险；${marketGate.canOpenNew ? "卖完后只看非冷却标的是否同时满足市场、赛道、个股三确认。" : `${marketGate.title}，卖完也不立刻开新仓。`}`;
   }
   if (!marketGate.canOpenNew) {
     return `${marketGate.detail} 当前只处理持仓，不开新仓；等指数确认后再看候选池。`;
   }
   if (buyCount) {
-    return "买入只按表内股数和价位执行，不把30%目标压力转成追高。单票风险仍按当前单笔风险上限控制。";
+    return "买入只按表内股数、价位和三确认执行，不把30%目标压力转成追高。单票风险仍按当前单笔风险上限控制。";
   }
   if (snapshot.floorGap <= 8000) {
     return `账户距离8%防守线只剩 ${formatMoney(snapshot.floorGap)}，今天以防守为主，不新增进攻仓。`;
@@ -2498,7 +2623,7 @@ function buildTodayAdviceDetail(stats, portfolio, snapshot, path, sellCount, buy
   if (path.gap < -5000) {
     return `估算净值落后今日路径 ${formatMoney(Math.abs(path.gap))}，但只能等明确触发价，不能因为目标落后临盘追。`;
   }
-  return `目标资产 ${formatMoney(stats.targetAssets)}，当前仓位 ${portfolio.exposure}%。今天直接执行表内价位：卖出线破了卖，买入线到了买，其余不动。`;
+  return `目标资产 ${formatMoney(stats.targetAssets)}，当前仓位 ${portfolio.exposure}%。今天直接执行表内价位：卖出线破了卖；买入必须三确认通过，其余不动。`;
 }
 
 function targetGapShareText(amount, snapshot = accountSnapshot()) {
@@ -2585,13 +2710,15 @@ function buildHoldingAdvice(position, portfolio, snapshot = accountSnapshot()) {
   const signalView = evaluatePositionSignal(position, quote);
   const price = quote ? numeric(quote.price) : numeric(position.currentPrice);
   const code = normalizeCode(position.code);
+  const positionType = positionTypeFor(position);
+  const cooling = coolingStatusForCode(code);
   const base = {
-    group: "持仓",
+    group: `持仓｜${positionType}`,
     name: position.name || code,
     code,
     priceText: price ? `现价${formatPrice(price)}` : "未刷新",
     level: signalView.level === "danger" ? "danger" : signalView.level === "watch" ? "watch" : signalView.level === "ok" ? "ok" : "neutral",
-    reason: signalView.detail,
+    reason: `${signalView.detail}${cooling.blocked ? ` ${cooling.detail}` : ""}`,
     rank: battleActionRank(signalView, position, portfolio),
     intent: signalView.level === "danger" ? "sell" : "hold",
     holdingMeta: buildHoldingActionMeta(position, price),
@@ -2643,26 +2770,22 @@ function buildHoldingAdvice(position, portfolio, snapshot = accountSnapshot()) {
   if (code === "300776") {
     const quantity = numeric(position.quantity);
     const command = price < 198
-      ? "处理新增仓"
-      : quantity >= 600 && price < 208
-        ? "盯回落"
-        : quantity >= 600
-          ? "持有不追"
-          : price >= 200 && price <= 205
-            ? "可加100股"
-            : "继续持有";
-    const intent = price < 198 ? "sell" : quantity < 600 && price >= 200 && price <= 205 ? "buy" : "hold";
+      ? "减仓/清底仓"
+      : price < 205
+        ? "冷却观察"
+        : price >= 212
+          ? "趋势观察"
+          : "持有不加";
+    const intent = price < 198 ? "sell" : "hold";
     return {
       ...base,
       command,
       intent,
-      executePrice: quantity >= 600 ? "已完成主攻加仓；不再追高" : "186-190企稳或站稳200加100股",
-      riskPrice: position.stop || "新增仓跌破205先降风险；198下方处理新增仓",
-      targetPrice: position.plan || "212-215上方看趋势，冲高回落跌破208降风险",
-      goalImpact: intent === "buy"
-        ? addHoldingGoalImpact(position, price, 100, 183, snapshot)
-        : holdingGoalImpact(position, price, intent, snapshot, price < 198 ? 500 : 0),
-      rank: command === "可加100股" ? base.rank + 30 : quantity >= 600 ? base.rank + 18 : base.rank
+      executePrice: cooling.blocked ? "今日已减仓，禁止买回；次日以后再看三确认" : "不主动加仓，只等次日后重新确认",
+      riskPrice: position.stop || "跌破198处理战术仓；核心逻辑失效再清",
+      targetPrice: position.plan || "收回212并放量才恢复趋势观察；否则只保留底仓",
+      goalImpact: holdingGoalImpact(position, price, intent, snapshot, price < 198 ? quantity : 0),
+      rank: cooling.blocked ? base.rank + 18 : base.rank
     };
   }
 
@@ -2694,25 +2817,26 @@ function buildHoldingActionMeta(position, price) {
 function buildCandidateAdvice(candidate, row, portfolio, marketGate = marketGateView(), snapshot = accountSnapshot()) {
   const quote = quoteForCode(candidate.code);
   const signalView = evaluateCandidateSignal(candidate, quote);
+  const executionGate = row?.executionGate || candidateExecutionGate(candidate, signalView, quote, marketGate);
   const price = quote ? numeric(quote.price) : 0;
   const shares = row ? row.shares : 0;
-  const activeBuy = signalView.level === "ok" && shares > 0;
+  const activeBuy = signalView.level === "ok" && executionGate.ok && shares > 0;
   const marketBlocked = signalView.level === "ok" && !marketGate.canOpenNew;
-  const avoid = marketBlocked || signalView.level === "danger" || ["禁止", "先减", "不加", "失效"].some((keyword) => signalView.title.includes(keyword));
+  const avoid = marketBlocked || executionGate.level === "cooldown" || signalView.level === "danger" || ["禁止", "先减", "不加", "失效"].some((keyword) => signalView.title.includes(keyword));
   const rank = activeBuy ? 90 + candidateUniverseScore(candidate) * 0.1 : avoid ? 45 : candidateUniverseScore(candidate);
   return {
     group: candidate.scope || "全局埋伏",
     name: candidate.name,
     code: candidate.code,
     priceText: quote ? `现价${formatPrice(price)}` : "待刷新",
-    command: activeBuy ? `买${shares}股` : marketBlocked ? "市场不买" : avoid ? "今天不买" : "等到价买",
+    command: activeBuy ? `买${shares}股` : executionGate.level === "cooldown" ? "冷却观察" : marketBlocked ? "市场不买" : avoid ? "今天不买" : "等三确认",
     level: activeBuy ? "ok" : avoid ? "watch" : "neutral",
     intent: activeBuy ? "buy" : avoid ? "avoid" : "hold",
     reason: activeBuy
-      ? `${signalView.detail} 预算约${formatMoney(row.capital)}。`
+      ? `${signalView.detail} ${executionGate.detail}。预算约${formatMoney(row.capital)}。`
       : marketBlocked
         ? `${marketGate.title}：${marketGate.detail}`
-        : `${signalView.detail} ${candidate.reason}`,
+        : `${executionGate.label}：${executionGate.detail}。${signalView.detail} ${candidate.reason}`,
     executePrice: candidate.trigger,
     riskPrice: `${candidate.stop}；${candidate.noChase}`,
     targetPrice: candidate.target,
@@ -2737,13 +2861,15 @@ function buildStockRecommendationTags({ code, candidate = null, position = null,
   const risk = override.risk || resolveRiskLabel(candidate, signalView, tokens);
   const oneMonthMove = override.oneMonthMove || resolveOneMonthMove(candidate, position, signalView, price);
   const holdingDays = override.holdingDays || resolveHoldingDays(risk, sectorHeat, candidate);
+  const positionTag = position ? positionTypeFor(position) : null;
   return [
+    positionTag,
     sectorHeat,
     valuation,
     risk,
     `1个月${oneMonthMove}`,
     `建议持有期${holdingDays}`
-  ];
+  ].filter(Boolean);
 }
 
 function resolveSectorHeat(trackScore, tokens = []) {
@@ -3719,18 +3845,19 @@ function candidateSizingRows(goal, portfolio, cash, riskBudget, marketGate = mar
   return rankedBuyCandidates().map((candidate) => {
     const quote = quoteForCode(candidate.code);
     const signalView = evaluateCandidateSignal(candidate, quote);
+    const executionGate = candidateExecutionGate(candidate, signalView, quote, marketGate);
     const refPrice = resolveCandidateReferencePrice(candidate, quote);
     const stopPrice = resolveCandidateStopPrice(candidate, quote, refPrice);
     const stopRisk = Math.max(0, refPrice - stopPrice);
     const maxSharesByRisk = stopRisk ? roundLotDown(riskBudget / stopRisk) : 0;
     const maxSharesByCapital = roundLotDown(Math.min(cash, numeric(candidate.capitalMax)) / Math.max(1, refPrice));
-    const signalAllowsBuy = signalView.level === "ok" && marketGate.canOpenNew;
+    const signalAllowsBuy = signalView.level === "ok" && executionGate.ok;
     const shares = signalAllowsBuy ? Math.max(0, Math.min(maxSharesByRisk, maxSharesByCapital)) : 0;
     const capital = shares * refPrice;
     const accountRisk = shares * stopRisk;
     const afterExposure = Math.round((portfolio.marketValue + capital) / Math.max(1, snapshot.activeAssets) * 1000) / 10;
     const riskOk = accountRisk <= riskBudget && afterExposure <= Math.max(numeric(state.maxPosition), portfolio.exposure);
-    const detail = buildCandidateSizingDetail(candidate, signalView, shares, accountRisk, riskBudget, afterExposure, marketGate);
+    const detail = buildCandidateSizingDetail(candidate, signalView, shares, accountRisk, riskBudget, afterExposure, marketGate, executionGate);
 
     return {
       name: candidate.name,
@@ -3742,13 +3869,17 @@ function candidateSizingRows(goal, portfolio, cash, riskBudget, marketGate = mar
       afterExposure,
       riskOk,
       signalTitle: signalView.title,
+      executionGate,
       detail
     };
   });
 }
 
-function buildCandidateSizingDetail(candidate, signalView, shares, accountRisk, riskBudget, afterExposure, marketGate = marketGateView()) {
+function buildCandidateSizingDetail(candidate, signalView, shares, accountRisk, riskBudget, afterExposure, marketGate = marketGateView(), executionGate = null) {
   if (!shares) {
+    if (executionGate && !executionGate.ok) {
+      return `${executionGate.label}：${executionGate.detail}。当前只观察，不生成买入股数。`;
+    }
     if (signalView.level === "ok" && !marketGate.canOpenNew) {
       return `${marketGate.title}：${marketGate.detail} 当前不生成买入股数。`;
     }
@@ -4420,11 +4551,10 @@ function evaluatePositionSignal(position, quote) {
 
   if (code === "300776") {
     if (price < 183) return signal("danger", "处理线触发", "帝尔激光跌破183，按计划处理风险。");
-    if (price < 188) return signal("watch", "不加仓", "跌破188不加仓，先看是否能收回。");
-    if (price > 205) return signal("watch", "强势但不追", "205以上不追，只保留原仓或等回踩。");
-    if (price >= 200) return signal("ok", "加仓触发区", "放量站稳200可按计划考虑加100股。");
-    if (price >= 186 && price <= 190) return signal("ok", "回踩触发区", "186-190企稳是低吸加仓观察区。");
-    return signal("neutral", "强势持有", "188上方可持有，等200突破或回踩确认。");
+    if (price < 198) return signal("danger", "战术仓破位", "跌破198说明战术仓继续走弱，优先减仓或清掉短线部分。");
+    if (price < 205) return signal("watch", "冷却观察", "减仓后不做同日买回，先看是否能重新收回205。");
+    if (price >= 212) return signal("ok", "趋势修复观察", "收回212并放量才说明趋势修复，但仍需次日后再评估是否加回。");
+    return signal("neutral", "持有不加", "205上方但未重新转强，保留底仓观察，不追买。");
   }
 
   return signal("neutral", "按手动计划", "未配置专属硬线，参考持仓里的止损和触发条件。");
@@ -4432,13 +4562,15 @@ function evaluatePositionSignal(position, quote) {
 
 function evaluateCandidateSignal(item, quote) {
   if (!quote) return signal("neutral", "等待行情刷新", "先刷新行情，再判断是否触发买入条件。");
+  const cooldown = coolingStatusForCode(item.code);
+  if (cooldown.blocked) return signal("watch", "冷却观察", cooldown.detail);
   const price = numeric(quote.price);
 
   if (item.id === "dier-laser") {
     if (price < 183) return signal("danger", "失效", "跌破183，先不考虑新增。");
     if (price < 188) return signal("watch", "不加仓", "跌破188不加仓，只观察是否收回。");
     if (price > 205) return signal("watch", "禁止追高", "已高于205禁追区，等回踩或次日确认。");
-    if (price >= 200 || (price >= 186 && price <= 190)) return signal("ok", "触发观察", "满足站稳200或186-190企稳条件，可进入小仓执行评估。");
+    if (price >= 200 || (price >= 186 && price <= 190)) return signal("ok", "三确认候选", "价格进入观察区，但必须市场、玻璃基板/设备赛道和个股量价同时确认才可试仓。");
     return signal("neutral", "继续等", "处在触发区之外，暂不急着买。");
   }
 

@@ -3,8 +3,9 @@
 Cloud A-share monitor.
 
 Reads the latest structured holdings from data/panel-sync.json, refreshes public
-Tencent quotes, evaluates stop/buy trigger rules, and sends alerts through
-configured notification channels.
+Tencent quotes, evaluates explicit price/risk trigger rules, and sends alerts
+through configured notification channels. It is a public-quote rule monitor, not
+a full AI trading committee or broker account reader.
 """
 from __future__ import annotations
 
@@ -227,6 +228,58 @@ def first_clause(text: str) -> str:
     return re.split(r"[；;。]", text or "", maxsplit=1)[0].strip() or text or ""
 
 
+def is_sell_action(action: Any) -> bool:
+    return any(keyword in str(action or "") for keyword in ("卖", "减", "清", "sell"))
+
+
+def compact_date(value: Any) -> str:
+    return re.sub(r"\D", "", str(value or ""))[:8]
+
+
+def trade_is_today(panel: dict[str, Any], trade: dict[str, Any]) -> bool:
+    today = now().strftime("%Y%m%d")
+    trade_date = compact_date(trade.get("date"))
+    if trade_date:
+        return trade_date == today
+    panel_date = compact_date(panel.get("dateKey"))
+    if panel_date:
+        return panel_date == today
+    return False
+
+
+def same_day_sold(panel: dict[str, Any], code: str) -> tuple[bool, int, float]:
+    target = normalize_code(code)
+    shares = 0
+    amount = 0.0
+    for trade in panel.get("trades", []):
+        if not trade_is_today(panel, trade):
+            continue
+        if normalize_code(trade.get("code")) != target:
+            continue
+        if not is_sell_action(trade.get("action")):
+            continue
+        quantity = int(numeric(trade.get("quantity")))
+        if quantity <= 0:
+            continue
+        shares += quantity
+        amount += numeric(trade.get("amount"), numeric(trade.get("price")) * quantity)
+    return shares > 0, shares, amount
+
+
+def candidate_gate_allows_buy(panel: dict[str, Any], item: dict[str, Any], gate: dict[str, Any]) -> tuple[bool, str]:
+    code = normalize_code(item.get("code"))
+    sold_today, shares, _amount = same_day_sold(panel, code)
+    if item.get("blockIfSoldToday", True) and sold_today:
+        return False, f"今日已卖出/减仓{shares}股，进入冷却期，云端不触发买回。"
+    if item.get("requireMarketGate", True) and not gate.get("can_buy"):
+        return False, f"{gate.get('title')}，市场闸门未开。"
+    if item.get("requireThreeConfirmations", True) and not item.get("confirmationsApproved", False):
+        return False, "缺少市场、赛道、个股量价三确认，候选价位触达也不发买入邮件。"
+    if str(item.get("enabled", "true")).lower() == "false":
+        return False, "候选规则未启用。"
+    return True, "市场、赛道、个股三确认均通过。"
+
+
 def load_rules() -> dict[str, Any]:
     path = Path(env("MONITOR_RULES_PATH", str(RULES_PATH))).expanduser()
     return load_json(path, {"positions": {}, "candidates": []})
@@ -297,7 +350,7 @@ def evaluate_positions(panel: dict[str, Any], quotes: dict[str, dict[str, Any]],
     return alerts
 
 
-def evaluate_candidates(quotes: dict[str, dict[str, Any]], rules: dict[str, Any], gate: dict[str, Any]) -> list[Alert]:
+def evaluate_candidates(panel: dict[str, Any], quotes: dict[str, dict[str, Any]], rules: dict[str, Any], gate: dict[str, Any]) -> list[Alert]:
     keyed_alerts: list[tuple[int, Alert]] = []
     for item in rules.get("candidates", []):
         code = normalize_code(item.get("code"))
@@ -306,7 +359,18 @@ def evaluate_candidates(quotes: dict[str, dict[str, Any]], rules: dict[str, Any]
         if not code or price <= 0:
             continue
         name = item.get("name") or quote.get("name") or code
-        if item.get("requireMarketGate", True) and not gate.get("can_buy"):
+        allowed, gate_reason = candidate_gate_allows_buy(panel, item, gate)
+        if not allowed:
+            if item.get("watchNotify", False):
+                keyed_alerts.append((int(numeric(item.get("priority"), 999)), Alert(
+                    level="watch",
+                    code=code,
+                    name=name,
+                    price=price,
+                    rule_price=None,
+                    action=item.get("watchAction", "候选股仅观察，不触发买入"),
+                    reason=gate_reason,
+                )))
             continue
         buy_above = numeric(item.get("buyAbove"))
         buy_below = numeric(item.get("buyBelow"))
@@ -319,7 +383,7 @@ def evaluate_candidates(quotes: dict[str, dict[str, Any]], rules: dict[str, Any]
                 price=price,
                 rule_price=buy_above,
                 action=item.get("action", "候选股触发买入观察"),
-                reason=f"现价{price:.2f} >= 触发价{buy_above:.2f}；{gate.get('title')}",
+                reason=f"现价{price:.2f} >= 触发价{buy_above:.2f}；{gate.get('title')}；{gate_reason}",
             )))
         elif buy_below and price <= buy_below:
             keyed_alerts.append((priority, Alert(
@@ -329,7 +393,7 @@ def evaluate_candidates(quotes: dict[str, dict[str, Any]], rules: dict[str, Any]
                 price=price,
                 rule_price=buy_below,
                 action=item.get("action", "候选股回踩触发观察"),
-                reason=f"现价{price:.2f} <= 回踩价{buy_below:.2f}；{gate.get('title')}",
+                reason=f"现价{price:.2f} <= 回踩价{buy_below:.2f}；{gate.get('title')}；{gate_reason}",
             )))
     keyed_alerts.sort(key=lambda item: item[0])
     max_alerts = int(numeric(rules.get("maxCandidateAlerts"), 0))
@@ -593,7 +657,7 @@ def main() -> int:
     quotes = fetch_tencent_quotes(position_codes + candidate_codes)
     gate = market_gate(quotes)
     alerts = evaluate_positions(panel, quotes, rules)
-    alerts.extend(evaluate_candidates(quotes, rules, gate))
+    alerts.extend(evaluate_candidates(panel, quotes, rules, gate))
     min_level = env("ALERT_MIN_LEVEL", "actionable").lower()
     if min_level == "actionable":
         alerts = [item for item in alerts if item.level in {"sell", "buy"}]
