@@ -1,5 +1,12 @@
 {
   "positions": {
+    "002185": {
+      "stopBelow": 22.0,
+      "stopAction": "华天科技剩余1000股仍低于22风控线；尾盘不能站回21.8-22.0，建议清掉剩余仓位，不再补仓",
+      "watchAbove": 22.8,
+      "watchAction": "华天科技重新站回22.8且封测板块回暖，才重新观察",
+      "watchNotify": false
+    },
     "300433": {
       "stopBelow": 52.8,
       "stopAction": "蓝思科技跌破52.8，先减半；跌破52.2退出新增逻辑",
@@ -8,17 +15,17 @@
       "watchNotify": false
     },
     "300776": {
-      "stopBelow": 205,
-      "stopAction": "帝尔激光跌破205，先卖300股；若14:30仍不能收回205，再卖100-200股，只留底仓或清掉新增风险",
-      "watchAbove": 208,
+      "stopBelow": 205.0,
+      "stopAction": "帝尔激光已按计划卖出300股；剩余300股若不能收回205，继续卖100-200股，只留底仓或清掉新增风险",
+      "watchAbove": 208.0,
       "watchAction": "帝尔激光收回208才暂停减仓；收回212并放量才恢复强势",
       "watchNotify": false,
-      "takeProfitAbove": 222,
+      "takeProfitAbove": 222.0,
       "takeProfitAction": "帝尔激光冲高到222以上，先卖100-200股锁利润；若继续上冲到226附近再看第二笔止盈"
     },
     "600276": {
       "stopBelow": 52.8,
-      "stopAction": "恒瑞医药跌破52.8，减200股保护今日强势利润；跌破51.5继续减",
+      "stopAction": "恒瑞医药跌破52.8，减200股保护强势利润；跌破51.5继续减",
       "watchAbove": 54.5,
       "watchAction": "恒瑞医药站稳54.5，趋势增强；冲55.5附近卖100-200股锁利润",
       "watchNotify": false
@@ -29,24 +36,10 @@
       "watchAbove": 23.5,
       "watchAction": "国电南瑞站稳23.5且电网板块走强，可考虑加300-500股",
       "watchNotify": false
-    },
-    "000021": {
-      "stopBelow": 61,
-      "stopAction": "深科技跌破61终极风控线，清掉500股，不再等反弹",
-      "watchAbove": 62.2,
-      "watchAction": "深科技重新站回62.2并放量，才重新纳入观察；今天不回补",
-      "watchNotify": false
-    },
-    "002185": {
-      "stopBelow": 22,
-      "stopAction": "华天科技跌破22.0，清仓2000股换现金；若无法一次清，至少先卖1000股",
-      "watchAbove": 22.8,
-      "watchAction": "华天科技重新站回22.8且封测板块回暖，才重新观察",
-      "watchNotify": false
     }
   },
   "candidates": [],
   "maxCandidateAlerts": 1,
   "maxNewBuyBudget": 0,
-  "note": "2026-07-01: 当前持仓6只且超过常规集中度上限，云端先只监控持仓止盈/止损，不触发新增买入邮件；新增候选需先减弱仓后再开启。"
+  "note": "2026-07-01 14:33: 已同步实际减仓后持仓。深科技已清仓，活跃持仓5只；云端只监控剩余持仓卖出/减仓触发，不触发新增买入邮件。"
 }
