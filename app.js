@@ -465,10 +465,153 @@ const positionTrackTagMap = {
   "300776": ["玻璃基板", "TGV", "设备", "科技"],
   "002028": ["电网设备", "特高压", "电力设备"],
   "300124": ["机器人", "智能制造", "工业自动化"],
-  "300274": ["新能源", "储能", "电力设备"]
+  "300274": ["新能源", "储能", "电力设备"],
+  "000021": ["存储芯片", "半导体", "科技"],
+  "002185": ["先进封装", "封测", "半导体", "科技"],
+  "300433": ["玻璃基板", "消费电子", "材料", "科技"],
+  "600276": ["创新药", "医药", "防守"],
+  "600406": ["电网设备", "特高压", "电力设备"]
 };
 
 const broadConflictTags = new Set(["科技", "设备", "材料", "防守", "国产替代"]);
+
+const stockRecommendationProfileOverrides = {
+  "000021": { heat: "当下热门赛道", valuation: "正常估值", risk: "中风险", oneMonthMove: "-6%至+12%", holdingDays: "5-10天" },
+  "002156": { heat: "当下热门赛道", valuation: "正常估值", risk: "中高风险", oneMonthMove: "-8%至+12%", holdingDays: "3-7天" },
+  "002185": { heat: "当下热门赛道", valuation: "正常估值", risk: "中风险", oneMonthMove: "-5%至+10%", holdingDays: "5-10天" },
+  "002463": { heat: "当下热门赛道", valuation: "高估值", risk: "中风险", oneMonthMove: "-7%至+12%", holdingDays: "5-10天" },
+  "002837": { heat: "当下热门赛道", valuation: "高估值", risk: "中风险", oneMonthMove: "-7%至+13%", holdingDays: "5-10天" },
+  "300433": { heat: "当下热门赛道", valuation: "正常估值", risk: "中风险", oneMonthMove: "-5%至+12%", holdingDays: "5-12天" },
+  "300776": { heat: "当下热门赛道", valuation: "高估值", risk: "中风险", oneMonthMove: "-8%至+18%", holdingDays: "5-12天" },
+  "600276": { heat: "中性赛道", valuation: "正常估值", risk: "低风险", oneMonthMove: "-4%至+8%", holdingDays: "10-20天" },
+  "600406": { heat: "中性赛道", valuation: "低估值", risk: "低风险", oneMonthMove: "-3%至+7%", holdingDays: "10-20天" }
+};
+
+const sectorPrepositionProbeSeed = [
+  {
+    track: "AI算力/通信",
+    status: "热门锚+分歧观察",
+    thesis: "用于判断科技风险偏好和高弹性资金强弱，不默认作为低位首选。",
+    catalyst: "云厂商AI资本开支、国产算力订单、通信链技术升级。",
+    probes: [
+      { code: "300308", name: "中际旭创", role: "光模块龙头" },
+      { code: "300502", name: "新易盛", role: "弹性龙头" },
+      { code: "002463", name: "沪电股份", role: "AI PCB" },
+      { code: "002837", name: "英维克", role: "液冷温控" }
+    ],
+    candidates: ["300308", "300502"],
+    lowPosition: false
+  },
+  {
+    track: "半导体设备/先进封装/存储链",
+    status: "科技低位轮动",
+    thesis: "当科技主线没有彻底退潮时，优先观察设备、封测、存储等国产替代分支能否接力。",
+    catalyst: "HBM、Chiplet、国产存储、封测扩产、先进封装设备订单。",
+    probes: [
+      { code: "002371", name: "北方华创", role: "设备龙头" },
+      { code: "688012", name: "中微公司", role: "设备龙头" },
+      { code: "000021", name: "深科技", role: "存储封测" },
+      { code: "002185", name: "华天科技", role: "封测替代" },
+      { code: "600584", name: "长电科技", role: "封测龙头" }
+    ],
+    candidates: ["002371", "000021", "002185"],
+    lowPosition: true
+  },
+  {
+    track: "机器人/智能制造",
+    status: "AI硬件扩散观察",
+    thesis: "观察AI应用从软件、算力向制造端扩散时，机器人链是否形成分支共振。",
+    catalyst: "人形机器人、工业自动化订单、减速器/伺服/电机多分支放量。",
+    probes: [
+      { code: "002747", name: "埃斯顿", role: "机器人本体" },
+      { code: "688017", name: "绿的谐波", role: "减速器" },
+      { code: "002472", name: "双环传动", role: "传动链" },
+      { code: "300124", name: "汇川技术", role: "工控伺服" }
+    ],
+    candidates: ["002747"],
+    lowPosition: true
+  },
+  {
+    track: "创新药/医药修复",
+    status: "防守反击",
+    thesis: "当科技波动加大或指数风险偏好回落时，医药修复可作为低相关方向。",
+    catalyst: "BD出海、临床数据、医保预期、港股医药联动。",
+    probes: [
+      { code: "600276", name: "恒瑞医药", role: "创新药核心" },
+      { code: "688235", name: "百济神州-U", role: "创新药龙头" },
+      { code: "688506", name: "百利天恒-U", role: "弹性创新药" }
+    ],
+    candidates: ["600276"],
+    lowPosition: true
+  },
+  {
+    track: "电网/电力设备",
+    status: "夏季窗口",
+    thesis: "迎峰度夏、电网投资和特高压催化出现时，适合作为科技仓的防守轮动。",
+    catalyst: "用电负荷、电网投资、特高压、配网改造、储能并网。",
+    probes: [
+      { code: "600406", name: "国电南瑞", role: "电网自动化" },
+      { code: "002028", name: "思源电气", role: "一次设备" },
+      { code: "000400", name: "许继电气", role: "电网设备" },
+      { code: "300274", name: "阳光电源", role: "储能逆变器" }
+    ],
+    candidates: ["600406"],
+    lowPosition: true
+  },
+  {
+    track: "新能源/储能",
+    status: "景气反转观察",
+    thesis: "不追长期下行尾部，只有价格、订单、政策或出清信号同步改善才纳入试仓。",
+    catalyst: "储能招标、光伏价格企稳、海外需求、并网政策。",
+    probes: [
+      { code: "300750", name: "宁德时代", role: "电池锚" },
+      { code: "300274", name: "阳光电源", role: "逆变器/储能" },
+      { code: "002812", name: "恩捷股份", role: "材料弹性" },
+      { code: "688599", name: "天合光能", role: "光伏组件" }
+    ],
+    candidates: [],
+    lowPosition: true
+  },
+  {
+    track: "金融/券商",
+    status: "风险偏好温度计",
+    thesis: "指数放量反攻时，券商和金融科技可验证市场是否进入进攻模式。",
+    catalyst: "成交额放大、政策预期、资本市场改革、指数突破。",
+    probes: [
+      { code: "300059", name: "东方财富", role: "金融科技" },
+      { code: "600030", name: "中信证券", role: "券商龙头" },
+      { code: "601688", name: "华泰证券", role: "券商龙头" }
+    ],
+    candidates: [],
+    lowPosition: false
+  },
+  {
+    track: "消费电子/玻璃基板",
+    status: "科技材料分支",
+    thesis: "关注材料、设备、终端创新形成共振时的低位切换机会。",
+    catalyst: "玻璃基板/TGV、AI终端、折叠屏、消费电子补库。",
+    probes: [
+      { code: "300433", name: "蓝思科技", role: "消费电子材料" },
+      { code: "300776", name: "帝尔激光", role: "TGV设备" },
+      { code: "000725", name: "京东方A", role: "面板锚" }
+    ],
+    candidates: ["300433", "300776"],
+    lowPosition: true
+  },
+  {
+    track: "低空经济/军工",
+    status: "政策题材观察",
+    thesis: "只在政策、订单和板块成交额同步确认时参与，避免单纯题材脉冲。",
+    catalyst: "低空试点、商业化订单、军工订单、产业会议。",
+    probes: [
+      { code: "002085", name: "万丰奥威", role: "低空经济锚" },
+      { code: "300719", name: "安达维尔", role: "航空维修弹性" },
+      { code: "688333", name: "铂力特", role: "军工3D打印" }
+    ],
+    candidates: [],
+    lowPosition: true
+  }
+];
 
 const marketIndexSeed = [
   { key: "sh000001", symbol: "sh000001", name: "上证", role: "broad" },
@@ -1065,6 +1208,7 @@ function renderBattlePlan() {
     ${dataGateHtml}
     ${renderTodayOrders(todayOrders)}
     ${renderActionSupportSummary(portfolio, snapshot, path, marketGate, mainAlerts)}
+    ${renderSectorPrepositionRadar(marketGate)}
     ${renderMajorInfoPreview(dataGate, portfolio)}
   `;
 }
@@ -1103,6 +1247,100 @@ function renderActionSupportSummary(portfolio, snapshot, path, marketGate, alert
         `).join("")}
       </section>
     ` : ""}
+  `;
+}
+
+function sectorPrepositionRadarItems(marketGate = marketGateView()) {
+  return sectorPrepositionProbeSeed.map((track) => {
+    const probes = (track.probes || []).map((probe) => ({
+      ...probe,
+      quote: quoteForCode(probe.code)
+    }));
+    const quoted = probes.filter((probe) => probe.quote);
+    const positiveCount = quoted.filter((probe) => numeric(probe.quote.pct) > 0).length;
+    const strongCount = quoted.filter((probe) => numeric(probe.quote.pct) >= 3).length;
+    const weakCount = quoted.filter((probe) => numeric(probe.quote.pct) <= -2).length;
+    const avgPct = quoted.length
+      ? quoted.reduce((sum, probe) => sum + numeric(probe.quote.pct), 0) / quoted.length
+      : 0;
+    const amountTotal = quoted.reduce((sum, probe) => sum + numeric(probe.quote.amount), 0);
+    const turnoverAvg = quoted.length
+      ? quoted.reduce((sum, probe) => sum + numeric(probe.quote.turnover), 0) / quoted.length
+      : 0;
+    const breadth = quoted.length ? positiveCount / quoted.length : 0;
+    const crowdPenalty = avgPct >= 4 || strongCount >= Math.max(2, Math.ceil(quoted.length * 0.6)) ? 10 : 0;
+    const gatePenalty = marketGate.canOpenNew ? 0 : 8;
+    const lowPositionBonus = track.lowPosition ? 8 : 0;
+    const dataPenalty = quoted.length < Math.min(2, probes.length) ? 10 : 0;
+    const score = Math.round(
+      45
+      + avgPct * 7
+      + breadth * 22
+      + Math.min(12, turnoverAvg * 1.2)
+      + Math.min(8, Math.log10(Math.max(1, amountTotal)) * 2)
+      + lowPositionBonus
+      - crowdPenalty
+      - gatePenalty
+      - weakCount * 5
+      - dataPenalty
+    );
+    const leaders = quoted
+      .slice()
+      .sort((a, b) => numeric(b.quote.pct) - numeric(a.quote.pct))
+      .slice(0, 3)
+      .map((probe) => `${probe.name}${formatSigned(probe.quote.pct)}%`);
+    const candidateNames = (track.candidates || [])
+      .map((code) => defaultBuyCandidates.find((candidate) => normalizeCode(candidate.code) === normalizeCode(code)))
+      .filter(Boolean)
+      .map((candidate) => `${candidate.name}(${normalizeCode(candidate.code)})`);
+    const level = score >= 72 ? "ok" : score >= 58 ? "watch" : "neutral";
+    const action = score >= 72 && marketGate.canOpenNew
+      ? "可进入今日买入清单校验"
+      : score >= 58
+        ? "观察，等放量/回踩确认"
+        : "暂不部署";
+
+    return {
+      ...track,
+      probes,
+      quotedCount: quoted.length,
+      avgPct,
+      amountTotal,
+      turnoverAvg,
+      breadth,
+      score,
+      level,
+      action,
+      leaders,
+      candidateNames
+    };
+  }).sort((a, b) => b.score - a.score);
+}
+
+function renderSectorPrepositionRadar(marketGate = marketGateView()) {
+  const items = sectorPrepositionRadarItems(marketGate).slice(0, 5);
+  return `
+    <section class="sector-radar-module" aria-label="全行业赛道探针">
+      <div class="sector-radar-head">
+        <div>
+          <span>全行业赛道探针</span>
+          <strong>只做今日买入清单的前置筛选</strong>
+        </div>
+        <p>按代表股涨跌、广度、换手/成交额和低位属性排序；不再限定光模块或单一产业链。</p>
+      </div>
+      <div class="sector-radar-list">
+        ${items.map((item) => `
+          <article class="${item.level}">
+            <div>
+              <strong>${item.track}</strong>
+              <span>${item.status}｜评分${item.score}</span>
+            </div>
+            <p>${item.action}｜均涨跌${formatSigned(item.avgPct)}%｜上涨广度${Math.round(item.breadth * 100)}%${item.leaders.length ? `｜强弱：${item.leaders.join("、")}` : "｜待刷新行情"}</p>
+            <small>${item.candidateNames.length ? `候选：${item.candidateNames.join("、")}` : "暂无直接买入候选，只作为赛道温度计"}｜${item.thesis}</small>
+          </article>
+        `).join("")}
+      </div>
+    </section>
   `;
 }
 
@@ -1249,21 +1487,7 @@ function renderBattleDataGate(gate) {
 function renderPositionConfirmBox(gate) {
   if (!state.positions.length && !gate.hasScreenshot) return "";
   if (gate.hasPositionConfirm) {
-    const totalValue = state.positions.reduce((sum, position) => sum + numeric(position.marketValue), 0);
-    return `
-      <div class="position-confirm-box confirmed compact-confirm">
-        <div class="position-confirm-head">
-          <div>
-            <strong>持仓表已确认</strong>
-            <p>${state.positions.length}只持仓｜市值${formatMoney(totalValue)}｜${gate.positionText}。下方建议已按这份持仓生成；若盘中变化，重新导入最新截图。</p>
-          </div>
-          <div class="position-confirm-actions">
-            <button class="ghost-button" type="button" data-battle-action="add-position-row">补一行</button>
-            <button class="primary-button" type="button" data-battle-action="confirm-positions">重新确认</button>
-          </div>
-        </div>
-      </div>
-    `;
+    return "";
   }
   const invalidRows = state.positions.filter((position) => !isValidPositionForConfirmation(position)).length;
   const canConfirm = gate.hasScreenshot && state.positions.length > 0 && invalidRows === 0;
@@ -1283,7 +1507,10 @@ function renderPositionConfirmBox(gate) {
         </div>
       </div>
       <div class="position-confirm-list">
-        ${state.positions.length ? state.positions.map((position, index) => `
+        ${state.positions.length ? state.positions.map((position, index) => {
+          const recalculated = recalculatePosition(position);
+          const pnlClass = recalculated.pnl >= 0 ? "result-profit" : "result-loss";
+          return `
           <article>
             <label>
               <span>名称</span>
@@ -1306,11 +1533,15 @@ function renderPositionConfirmBox(gate) {
               <input type="number" min="0" step="0.001" value="${numeric(position.currentPrice)}" data-position-correction="${index}" data-field="currentPrice">
             </label>
             <div class="position-confirm-result">
-              <strong>${formatMoney(position.marketValue)}｜${formatMoney(position.pnl)}</strong>
+              <span>核对明细</span>
+              <strong>${position.name || "未命名"} ${normalizeCode(position.code) || "--"}</strong>
+              <b>${formatMoney(recalculated.marketValue)}｜${recalculated.quantity || 0}股</b>
+              <b class="${pnlClass}">${formatMoney(recalculated.pnl)}｜${formatSigned(recalculated.pnlRate)}%</b>
               <button class="text-danger-button" type="button" data-battle-action="remove-position-row" data-position-index="${index}">删除</button>
             </div>
           </article>
-        `).join("") : `
+        `;
+        }).join("") : `
           <article class="empty-position-row">
             <p>OCR 没有生成持仓行。可以按截图手动新增持仓行，补齐后再确认。</p>
           </article>
@@ -1564,6 +1795,8 @@ function renderTodayActionRow(item) {
     <article class="action-row ${item.level}" data-action-row="${escapeAttribute(actionKey)}">
       <div class="action-row-main">
         <span>${item.group}｜${item.code}｜${item.priceText}</span>
+        ${renderHoldingActionMeta(item)}
+        ${renderRecommendationTags(item)}
         <strong>${item.name}</strong>
         <p>${item.reason}</p>
       </div>
@@ -1605,6 +1838,27 @@ function renderTodayActionRow(item) {
         </label>
       </div>
     </article>
+  `;
+}
+
+function renderHoldingActionMeta(item) {
+  if (!item.holdingMeta) return "";
+  return `
+    <div class="action-holding-meta">
+      <span>成本 <b>${item.holdingMeta.cost}</b></span>
+      <span>数量 <b>${item.holdingMeta.quantity}股</b></span>
+      <span>盈亏 <b class="${item.holdingMeta.pnlClass}">${item.holdingMeta.pnl}</b></span>
+      <span>盈亏率 <b class="${item.holdingMeta.pnlClass}">${item.holdingMeta.pnlRate}</b></span>
+    </div>
+  `;
+}
+
+function renderRecommendationTags(item) {
+  if (!item.recommendationTags?.length) return "";
+  return `
+    <div class="action-recommendation-tags">
+      ${item.recommendationTags.map((tag) => `<span>${tag}</span>`).join("")}
+    </div>
   `;
 }
 
@@ -2169,6 +2423,8 @@ function renderTodayOrderRow(item) {
     <article class="action-row ${actionTone} ${triggered ? "auto-trigger" : ""}" data-order-row="${escapeAttribute(item.code)}|${escapeAttribute(item.intent || item.orderType)}">
       <div class="action-row-main">
         <span>${item.group}｜${item.code}｜${item.priceText}</span>
+        ${renderHoldingActionMeta(item)}
+        ${renderRecommendationTags(item)}
         <strong>${item.name}</strong>
         <p>${item.reason}</p>
       </div>
@@ -2338,6 +2594,8 @@ function buildHoldingAdvice(position, portfolio, snapshot = accountSnapshot()) {
     reason: signalView.detail,
     rank: battleActionRank(signalView, position, portfolio),
     intent: signalView.level === "danger" ? "sell" : "hold",
+    holdingMeta: buildHoldingActionMeta(position, price),
+    recommendationTags: buildStockRecommendationTags({ code, position, signalView, price }),
     goalImpact: holdingGoalImpact(position, price, signalView.level === "danger" ? "sell" : "hold", snapshot)
   };
 
@@ -2417,6 +2675,22 @@ function buildHoldingAdvice(position, portfolio, snapshot = accountSnapshot()) {
   };
 }
 
+function buildHoldingActionMeta(position, price) {
+  const effectivePrice = numeric(price) || numeric(position.currentPrice);
+  const calculated = recalculatePosition({
+    ...position,
+    currentPrice: effectivePrice
+  });
+  const pnlClass = calculated.pnl >= 0 ? "result-profit" : "result-loss";
+  return {
+    cost: formatPrice(calculated.cost),
+    quantity: calculated.quantity || 0,
+    pnl: formatMoney(calculated.pnl),
+    pnlRate: `${formatSigned(calculated.pnlRate)}%`,
+    pnlClass
+  };
+}
+
 function buildCandidateAdvice(candidate, row, portfolio, marketGate = marketGateView(), snapshot = accountSnapshot()) {
   const quote = quoteForCode(candidate.code);
   const signalView = evaluateCandidateSignal(candidate, quote);
@@ -2442,9 +2716,73 @@ function buildCandidateAdvice(candidate, row, portfolio, marketGate = marketGate
     executePrice: candidate.trigger,
     riskPrice: `${candidate.stop}；${candidate.noChase}`,
     targetPrice: candidate.target,
+    recommendationTags: buildStockRecommendationTags({ code: candidate.code, candidate, signalView, price }),
     goalImpact: candidateGoalImpact(candidate, row, activeBuy, marketBlocked, snapshot),
     rank
   };
+}
+
+function buildStockRecommendationTags({ code, candidate = null, position = null, signalView = null, price = 0 }) {
+  const normalizedCode = normalizeCode(code || candidate?.code || position?.code);
+  const override = stockRecommendationProfileOverrides[normalizedCode] || {};
+  const tokens = candidate
+    ? candidateTrackTokens(candidate)
+    : (positionTrackTagMap[normalizedCode] || []);
+  const trackText = candidate
+    ? `${candidate.track || ""}${candidate.reason || ""}${candidate.scope || ""}${tokens.join("")}`
+    : `${position?.name || ""}${position?.plan || ""}${position?.trigger || ""}${tokens.join("")}`;
+  const trackScore = matchedTrackScore(trackText);
+  const sectorHeat = override.heat || resolveSectorHeat(trackScore, tokens);
+  const valuation = override.valuation || resolveValuationLabel(tokens, candidate, position);
+  const risk = override.risk || resolveRiskLabel(candidate, signalView, tokens);
+  const oneMonthMove = override.oneMonthMove || resolveOneMonthMove(candidate, position, signalView, price);
+  const holdingDays = override.holdingDays || resolveHoldingDays(risk, sectorHeat, candidate);
+  return [
+    sectorHeat,
+    valuation,
+    risk,
+    `1个月${oneMonthMove}`,
+    `建议持有期${holdingDays}`
+  ];
+}
+
+function resolveSectorHeat(trackScore, tokens = []) {
+  const tokenText = tokens.join("");
+  if (trackScore >= 72 || /AI|算力|光模块|半导体|先进封装|玻璃基板|机器人|存储芯片/.test(tokenText)) return "当下热门赛道";
+  if (/高股息|电网|医药|防守/.test(tokenText)) return "中性赛道";
+  if (trackScore <= 35) return "冷门赛道";
+  return "中性赛道";
+}
+
+function resolveValuationLabel(tokens = [], candidate = null, position = null) {
+  const tokenText = `${tokens.join("")}${candidate?.track || ""}${position?.name || ""}`;
+  if (/光模块|AI|算力|机器人|低空|玻璃基板|TGV/.test(tokenText)) return "高估值";
+  if (/电网|高股息|央企/.test(tokenText)) return "低估值";
+  if (/医药|创新药|封测|半导体|存储/.test(tokenText)) return "正常估值";
+  return "正常估值";
+}
+
+function resolveRiskLabel(candidate = null, signalView = null, tokens = []) {
+  const tokenText = tokens.join("");
+  if (signalView?.level === "danger" || numeric(candidate?.stopPct) >= 7.5 || /低空|机器人/.test(tokenText)) return "高风险";
+  if (/电网|高股息|医药|防守/.test(tokenText) && signalView?.level !== "watch") return "低风险";
+  return "中风险";
+}
+
+function resolveOneMonthMove(candidate = null, position = null, signalView = null, price = 0) {
+  if (candidate?.expectedMove) return String(candidate.expectedMove).replace(/%至/g, "%至");
+  if (signalView?.level === "danger") return "-10%至+4%";
+  if (signalView?.level === "ok") return "-4%至+12%";
+  if (position?.plan && /防守|电网|医药/.test(position.plan)) return "-3%至+8%";
+  return "-6%至+10%";
+}
+
+function resolveHoldingDays(risk, sectorHeat, candidate = null) {
+  if (candidate?.priority?.includes("防守")) return "10-20天";
+  if (risk === "高风险") return "3-5天";
+  if (sectorHeat === "当下热门赛道") return "5-10天";
+  if (risk === "低风险") return "10-20天";
+  return "5-12天";
 }
 
 function battlePositionActions(portfolio) {
@@ -3482,6 +3820,7 @@ function renderSummary() {
 function renderPortfolio() {
   const summary = document.querySelector("#portfolioSummary");
   const list = document.querySelector("#positionList");
+  if (!summary || !list) return;
   const stats = portfolioStats();
   renderScreenshotImport();
 
@@ -3489,7 +3828,7 @@ function renderPortfolio() {
     summary.innerHTML = `
       <article class="empty-state">
         <strong>${state.thsConnection.screenshotDataUrl ? "已同步首屏截图，等待识别成持仓表。" : "先在首屏导入持仓截图，我再给硬判断。"}</strong>
-        <p>${state.thsConnection.screenshotDataUrl ? "当前页面读取首屏上传的同一张截图。请回到首屏点击“识别截图生成持仓表”，识别后核对确认。" : "持仓体检不再单独上传截图。请先在最上端一次性导入最新券商持仓截图，后续所有板块会同步使用同一份数据。"}</p>
+        <p>${state.thsConnection.screenshotDataUrl ? "当前页面读取首屏上传的同一张截图。请回到首屏点击“识别截图生成持仓表”，识别后所有操作建议会同步使用同一份数据。" : "请先在最上端一次性导入最新券商持仓截图，后续所有板块会同步使用同一份数据。"}</p>
       </article>
     `;
     list.innerHTML = "";
@@ -3506,13 +3845,16 @@ function renderPortfolio() {
 
   list.innerHTML = state.positions.map((position, index) => {
     const quote = quoteForCode(position.code);
-    const marketValue = numeric(position.marketValue) || numeric(position.quantity) * numeric(position.currentPrice);
-    const pnl = numeric(position.pnl);
+    const recalculated = recalculatePosition(position);
+    const marketValue = numeric(recalculated.marketValue) || numeric(recalculated.quantity) * numeric(recalculated.currentPrice);
+    const pnl = numeric(recalculated.pnl);
+    const pnlRate = numeric(recalculated.pnlRate);
+    const pnlClass = pnl >= 0 ? "result-profit" : "result-loss";
     const weight = stats.marketValue ? Math.round(marketValue / stats.marketValue * 1000) / 10 : 0;
     return `
       <article class="position-card compact">
         <div>
-          <strong>${position.name || position.code} <span>${position.code}｜${position.quantity || "--"}股｜成本 ${position.cost || "--"}｜现价 ${position.currentPrice || "--"}</span></strong>
+          <strong>${position.name || position.code} <span>${normalizeCode(position.code)}｜${recalculated.quantity || "--"}股｜成本 ${formatPrice(recalculated.cost)}｜现价 ${formatPrice(recalculated.currentPrice)}</span></strong>
           <div class="quote-snapshot">
             ${quote ? `
               <span>行情 <b>${formatPrice(quote.price)}</b></span>
@@ -3526,9 +3868,12 @@ function renderPortfolio() {
           <p class="position-reason">本区只核对持仓数据，不输出买卖判断；操作以顶部“今日操作建议”为准。</p>
         </div>
         <div class="position-numbers">
+          <span>代码 ${normalizeCode(position.code)}</span>
+          <span>数量 ${recalculated.quantity || 0}股</span>
           <span>权重 ${weight}%</span>
           <span>市值 ${formatMoney(marketValue)}</span>
-          <strong class="${pnl >= 0 ? "result-profit" : "result-loss"}">${formatMoney(pnl)}</strong>
+          <strong class="${pnlClass}">${formatMoney(pnl)}</strong>
+          <span class="${pnlClass}">盈亏率 ${formatSigned(pnlRate)}%</span>
           <button class="tag" type="button" data-remove-position="${index}">移除</button>
         </div>
       </article>
@@ -3538,6 +3883,7 @@ function renderPortfolio() {
 
 function renderScreenshotImport() {
   const container = document.querySelector("#screenshotImport");
+  if (!container) return;
   const connection = state.thsConnection;
   if (!connection.screenshotDataUrl) {
     container.innerHTML = `
@@ -3731,7 +4077,8 @@ function quoteSymbol(code) {
 function quoteUniverse() {
   const codes = [
     ...state.positions.map((position) => position.code),
-    ...defaultBuyCandidates.map((candidate) => candidate.code)
+    ...defaultBuyCandidates.map((candidate) => candidate.code),
+    ...sectorPrepositionProbeSeed.flatMap((track) => (track.probes || []).map((probe) => probe.code))
   ];
   return [...new Set(codes.map(normalizeCode).filter((code) => /^\d{6}$/.test(code)))];
 }
@@ -3866,6 +4213,8 @@ function refreshPublicQuotes(options = {}) {
 }
 
 async function syncLatestData(options = {}) {
+  await applyPanelSync();
+
   const hasHoldingScreenshot = Boolean(state.thsConnection.screenshotDataUrl);
   const needsHoldingOcr = hasHoldingScreenshot && !state.positions.length && !isOcrRunning();
   if (needsHoldingOcr) {
@@ -4014,7 +4363,10 @@ function parseTencentQuote(symbol, raw) {
     change: numeric(parts[31]),
     pct: numeric(parts[32]),
     high: numeric(parts[33]),
-    low: numeric(parts[34])
+    low: numeric(parts[34]),
+    volume: numeric(parts[36]),
+    amount: numeric(parts[37]),
+    turnover: numeric(parts[38])
   };
 }
 
@@ -4235,6 +4587,10 @@ function recalculatePosition(position) {
   const quantity = numeric(position.quantity);
   const cost = numeric(position.cost);
   const currentPrice = numeric(position.currentPrice);
+  const pnl = Number((quantity * (currentPrice - cost)).toFixed(2));
+  const pnlRate = quantity > 0 && cost > 0
+    ? Number(((currentPrice - cost) / cost * 100).toFixed(2))
+    : numeric(position.pnlRate);
   return {
     ...position,
     code: normalizeCode(position.code),
@@ -4242,7 +4598,8 @@ function recalculatePosition(position) {
     cost,
     currentPrice,
     marketValue: Number((quantity * currentPrice).toFixed(2)),
-    pnl: Number((quantity * (currentPrice - cost)).toFixed(2))
+    pnl,
+    pnlRate
   };
 }
 
@@ -5139,11 +5496,11 @@ document.querySelector("#recalcSizing").addEventListener("click", () => {
   renderSizingPlanner();
 });
 
-document.querySelector("#loadKnownPortfolio").addEventListener("click", () => {
+document.querySelector("#loadKnownPortfolio")?.addEventListener("click", () => {
   loadKnownPortfolioTemplate();
 });
 
-document.querySelector("#refreshQuotes").addEventListener("click", () => {
+document.querySelector("#refreshQuotes")?.addEventListener("click", () => {
   syncLatestData();
 });
 
@@ -5221,7 +5578,7 @@ document.querySelector("#battlePlan").addEventListener("click", (event) => {
   }
 });
 
-document.querySelector("#addPosition").addEventListener("click", () => {
+document.querySelector("#addPosition")?.addEventListener("click", () => {
   const position = buildPositionFromForm();
   if (!position) return;
   state.positions.unshift(position);
@@ -5230,7 +5587,7 @@ document.querySelector("#addPosition").addEventListener("click", () => {
   render();
 });
 
-document.querySelector("#clearPortfolio").addEventListener("click", () => {
+document.querySelector("#clearPortfolio")?.addEventListener("click", () => {
   state.positions = [];
   state.account.cashBalance = numeric(state.goal.currentAssets);
   state.account.cashUpdatedAt = nowLabel();
@@ -5247,12 +5604,12 @@ document.querySelector("#clearPortfolio").addEventListener("click", () => {
   render();
 });
 
-document.querySelector("#quoteStatus").addEventListener("click", (event) => {
+document.querySelector("#quoteStatus")?.addEventListener("click", (event) => {
   if (!(event.target instanceof Element) || !event.target.closest("#refreshQuotesInline")) return;
   syncLatestData();
 });
 
-document.querySelector("#positionList").addEventListener("click", (event) => {
+document.querySelector("#positionList")?.addEventListener("click", (event) => {
   const button = event.target.closest("[data-remove-position]");
   if (!button) return;
   state.positions.splice(Number(button.dataset.removePosition), 1);

@@ -1,19 +1,5 @@
 {
   "positions": {
-    "000021": {
-      "stopBelow": 62.2,
-      "stopAction": "深科技跌破62.2，先减半锁利润；跌破61.0清掉试仓",
-      "watchAbove": 66.0,
-      "watchAction": "深科技站稳66，存储芯片趋势延续，继续持有",
-      "watchNotify": false
-    },
-    "002185": {
-      "stopBelow": 22.0,
-      "stopAction": "华天科技跌破22.0，直接清仓2000股换强，不再减半观察",
-      "watchAbove": 22.8,
-      "watchAction": "华天科技站稳22.8，封测板块放量时继续持有",
-      "watchNotify": false
-    },
     "300433": {
       "stopBelow": 52.8,
       "stopAction": "蓝思科技跌破52.8，先减半；跌破52.2退出新增逻辑",
@@ -22,12 +8,12 @@
       "watchNotify": false
     },
     "300776": {
-      "stopBelow": 208.0,
+      "stopBelow": 208,
       "stopAction": "帝尔激光跌破208，减300股锁利润；跌破205继续处理新增仓",
-      "watchAbove": 226.0,
+      "watchAbove": 226,
       "watchAction": "帝尔激光冲高到226附近，观察第二笔止盈",
       "watchNotify": false,
-      "takeProfitAbove": 222.0,
+      "takeProfitAbove": 222,
       "takeProfitAction": "帝尔激光冲高到222以上，先卖100-200股锁利润；若继续上冲到226附近再看第二笔止盈"
     },
     "600276": {
@@ -43,34 +29,24 @@
       "watchAbove": 23.5,
       "watchAction": "国电南瑞站稳23.5且电网板块走强，可考虑加300-500股",
       "watchNotify": false
+    },
+    "000021": {
+      "stopBelow": 62.2,
+      "stopAction": "深科技跌破62.2，先减半锁利润；跌破61.0清掉试仓",
+      "watchAbove": 66,
+      "watchAction": "深科技站稳66，存储芯片趋势延续，继续持有",
+      "watchNotify": false
+    },
+    "002185": {
+      "stopBelow": 22,
+      "stopAction": "华天科技跌破22.0，直接清仓2000股换强，不再减半观察",
+      "watchAbove": 22.8,
+      "watchAction": "华天科技站稳22.8，封测板块放量时继续持有",
+      "watchNotify": false
     }
   },
-  "candidates": [
-    {
-      "code": "002156",
-      "name": "通富微电",
-      "buyAbove": 76.2,
-      "action": "先进封装/封测继续确认，站稳76.2且板块放量时只试仓300-500股；单日新增买入只选这一只优先，预算不超过6万",
-      "requireMarketGate": true,
-      "priority": 1
-    },
-    {
-      "code": "300502",
-      "name": "新易盛",
-      "buyAbove": 615.0,
-      "action": "AI算力/CPO强势确认，站稳615才小仓追踪；仅在通富未触发或明显弱于CPO时考虑，预算不超过6万",
-      "requireMarketGate": true,
-      "priority": 2
-    },
-    {
-      "code": "002747",
-      "name": "埃斯顿",
-      "buyAbove": 38.2,
-      "action": "机器人方向轮动确认，突破38.2可小仓观察；仅在科技主线不触发时考虑，预算不超过6万",
-      "requireMarketGate": true,
-      "priority": 3
-    }
-  ],
+  "candidates": [],
   "maxCandidateAlerts": 1,
-  "maxNewBuyBudget": 60000
+  "maxNewBuyBudget": 0,
+  "note": "2026-07-01: 当前持仓6只且超过常规集中度上限，云端先只监控持仓止盈/止损，不触发新增买入邮件；新增候选需先减弱仓后再开启。"
 }

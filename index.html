@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>A股热点风格工作台</title>
-    <link rel="stylesheet" href="styles.css?v=20260629-density-v1">
+    <link rel="stylesheet" href="styles.css?v=20260701-focused-action-v1">
   </head>
   <body>
     <main class="app-shell">
@@ -20,7 +20,6 @@
         <nav class="nav-list">
           <a href="#battle" class="nav-item active">今日建议</a>
           <a href="#goal" class="nav-item">30天目标</a>
-          <a href="#positions" class="nav-item">持仓体检</a>
           <a href="#sizing" class="nav-item">仓位预算</a>
           <a href="#intraday" class="nav-item">盘中检查</a>
           <a href="#closeReview" class="nav-item">收盘复盘</a>
@@ -135,39 +134,10 @@
             <div id="closeReviewBox" class="close-review-box"></div>
           </section>
 
-          <section id="positions" class="panel panel-wide" aria-labelledby="positionsTitle">
-            <div class="panel-heading">
-              <div>
-                <p class="eyebrow">Portfolio check</p>
-                <h3 id="positionsTitle">持仓数据核对</h3>
-              </div>
-              <div class="panel-actions">
-                <button id="refreshQuotes" class="primary-button" type="button">刷新行情</button>
-                <button id="loadKnownPortfolio" class="ghost-button" type="button">载入样例持仓</button>
-                <button id="clearPortfolio" class="ghost-button" type="button">清空持仓</button>
-              </div>
-            </div>
-            <div id="screenshotImport" class="screenshot-import"></div>
-            <div id="quoteStatus" class="quote-status"></div>
-            <div class="position-form">
-              <input id="positionName" type="text" placeholder="名称">
-              <input id="positionCode" type="text" placeholder="代码">
-              <input id="positionQuantity" type="number" min="0" step="100" placeholder="股数">
-              <input id="positionCost" type="number" min="0" step="0.001" placeholder="成本">
-              <input id="positionPrice" type="number" min="0" step="0.001" placeholder="现价">
-              <input id="positionStop" type="text" placeholder="止损/减仓线">
-              <input id="positionTrigger" type="text" placeholder="加仓/止盈触发">
-              <input id="positionPlan" type="text" placeholder="当前计划">
-              <button id="addPosition" class="primary-button" type="button">加入持仓</button>
-            </div>
-            <div id="portfolioSummary" class="portfolio-summary"></div>
-            <div id="positionList" class="position-list"></div>
-          </section>
-
         </section>
       </section>
     </main>
 
-    <script src="app.js?v=20260629-density-v1&cacheBust=compactDecisionLayout"></script>
+    <script src="app.js?v=20260701-focused-action-v1&cacheBust=removePortfolioCheck"></script>
   </body>
 </html>
