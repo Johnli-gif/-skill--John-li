@@ -863,6 +863,13 @@ const defaultState = {
     status: "未刷新",
     source: "腾讯证券公开行情"
   },
+  majorInfo: {
+    updatedAt: "",
+    source: "静态模板",
+    headlineCount: 0,
+    items: [],
+    status: "未刷新"
+  },
   autoRefresh: {
     enabled: true,
     intervalMinutes: 10,
@@ -979,6 +986,46 @@ async function applyPanelSync() {
   }
 }
 
+async function refreshMajorInfo(options = {}) {
+  const source = options.source || "manual";
+  const refreshFlag = options.refresh === false ? "0" : "1";
+  const endpoint = `api/major-info?refresh=${refreshFlag}&source=${encodeURIComponent(source)}&ts=${Date.now()}`;
+  const fallback = `data/major-info.json?ts=${Date.now()}`;
+  try {
+    let payload = null;
+    try {
+      const response = await fetch(endpoint, { cache: "no-store" });
+      if (response.ok) {
+        const result = await response.json();
+        payload = result.data || result;
+      }
+    } catch {
+      const response = await fetch(fallback, { cache: "no-store" });
+      if (response.ok) payload = await response.json();
+    }
+    if (!payload || !Array.isArray(payload.items)) return false;
+    state.majorInfo = {
+      ...state.majorInfo,
+      updatedAt: payload.updatedAt || nowLabel(),
+      source: payload.source || "公开财经信息",
+      headlineCount: numeric(payload.headlineCount),
+      items: payload.items,
+      status: payload.items.length ? `已更新 ${payload.items.length} 条重大资讯` : "未识别到重大资讯",
+      note: payload.note || "",
+      sourceUrls: payload.sourceUrls || []
+    };
+    saveState();
+    return true;
+  } catch (error) {
+    state.majorInfo = {
+      ...state.majorInfo,
+      status: `资讯刷新失败：${error.message || "网络不可用"}`
+    };
+    saveState();
+    return false;
+  }
+}
+
 function loadState() {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
@@ -1038,6 +1085,11 @@ function mergeState(base, saved) {
       ...(saved.quotes || {}),
       byCode: { ...base.quotes.byCode, ...((saved.quotes || {}).byCode || {}) },
       byIndex: { ...base.quotes.byIndex, ...((saved.quotes || {}).byIndex || {}) }
+    },
+    majorInfo: {
+      ...base.majorInfo,
+      ...(saved.majorInfo || {}),
+      items: Array.isArray((saved.majorInfo || {}).items) ? saved.majorInfo.items : base.majorInfo.items
     },
     autoRefresh: {
       ...base.autoRefresh,
@@ -2050,18 +2102,21 @@ function candidateExecutionGate(candidate, signalView, quote, marketGate = marke
 function renderMajorInfoPreview(gate, portfolio = portfolioStats()) {
   const items = rankedMajorInfoItems(gate, portfolio);
   const marketDataReady = gate?.ready;
+  const infoUpdatedAt = state.majorInfo?.updatedAt ? formatMajorInfoTime(state.majorInfo.updatedAt) : "未刷新";
+  const infoSource = state.majorInfo?.source || "静态模板";
+  const headlineCount = numeric(state.majorInfo?.headlineCount);
   return `
     <section class="major-info-module">
       <div class="major-info-head">
         <div>
           <span>重大财经资讯预告</span>
           <strong>先看影响方向，再决定是否提高进攻仓位</strong>
-          <p>覆盖经济数据、科技突破、能源电网、外部风险。这里是重大事项雷达，不替代持仓截图和行情刷新。</p>
+          <p>覆盖经济数据、科技突破、能源电网、外部风险。点击“一键刷新数据”会同步更新本模块；失败才回退静态模板。</p>
         </div>
         <div class="major-info-source">
-          <span>使用方式</span>
-          <strong>${marketDataReady ? "已联动当前持仓" : "等待持仓导入后联动"}</strong>
-          <p>${marketDataReady ? "下列事项会按你当前持仓和候选股提高优先级。" : "未完成首屏数据确认前，只显示通用A股影响，不生成买卖动作。"}</p>
+          <span>${infoSource}</span>
+          <strong>${infoUpdatedAt}</strong>
+          <p>${headlineCount ? `已扫描${headlineCount}条公开标题。` : (marketDataReady ? "已联动当前持仓。" : "等待持仓导入后联动。")}${state.majorInfo?.status ? `｜${state.majorInfo.status}` : ""}</p>
         </div>
       </div>
       <div class="major-info-list">
@@ -2078,6 +2133,7 @@ function renderMajorInfoCard(item) {
       ? `候选联动：${item.relatedCandidates.join("、")}`
       : "暂无当前持仓直接联动";
   const eventText = (item.events || []).slice(0, 2).join("；");
+  const sourceLinks = Array.isArray(item.links) ? item.links.slice(0, 2) : [];
   return `
     <article class="major-info-card ${item.tone}">
       <div class="major-info-title">
@@ -2089,6 +2145,9 @@ function renderMajorInfoCard(item) {
       </div>
       <p>${item.summary}</p>
       <p class="major-info-compact-line"><b>资讯：</b>${item.timing}${eventText ? `｜${eventText}` : ""}</p>
+      ${sourceLinks.length ? `
+        <p class="major-info-source-line"><b>原文：</b>${sourceLinks.map((link) => `<a href="${escapeAttribute(link.url)}" target="_blank" rel="noreferrer">${link.source || "来源"}｜${link.title}</a>`).join("；")}</p>
+      ` : ""}
       <div class="major-info-tags">
         ${item.focusSectors.map((sector) => `<span>${sector}</span>`).join("")}
       </div>
@@ -2106,10 +2165,26 @@ function renderMajorInfoCard(item) {
   `;
 }
 
+function formatMajorInfoTime(value) {
+  if (!value) return "未刷新";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  });
+}
+
 function rankedMajorInfoItems(gate, portfolio) {
   const holdingCodes = new Set(state.positions.map((position) => normalizeCode(position.code)));
   const candidateCodes = new Set(defaultBuyCandidates.map((candidate) => normalizeCode(candidate.code)));
-  return majorInfoSeed.map((item) => {
+  const sourceItems = Array.isArray(state.majorInfo?.items) && state.majorInfo.items.length
+    ? state.majorInfo.items
+    : majorInfoSeed;
+  return sourceItems.map((item) => {
     const relatedHoldings = item.stocks
       .filter((stock) => holdingCodes.has(normalizeCode(stock.code)))
       .map((stock) => stock.name);
@@ -4345,6 +4420,7 @@ function refreshPublicQuotes(options = {}) {
 
 async function syncLatestData(options = {}) {
   await applyPanelSync();
+  await refreshMajorInfo(options);
 
   const hasHoldingScreenshot = Boolean(state.thsConnection.screenshotDataUrl);
   const needsHoldingOcr = hasHoldingScreenshot && !state.positions.length && !isOcrRunning();
@@ -5824,4 +5900,7 @@ document.querySelector("#resetData").addEventListener("click", () => {
 
 render();
 applyPanelSync();
+refreshMajorInfo({ source: "load", refresh: false }).then((updated) => {
+  if (updated) render();
+});
 startAutoRefreshLoop();

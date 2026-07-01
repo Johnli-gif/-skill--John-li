@@ -1,6 +1,7 @@
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
+const { execFile } = require("child_process");
 
 const PORTS = [8090, 8091, 9000];
 const ROOT = path.resolve(__dirname);
@@ -16,6 +17,8 @@ const MIME = {
   ".ico": "image/x-icon"
 };
 const statePath = path.join(ROOT, "data", "today-orders.json");
+const majorInfoPath = path.join(ROOT, "data", "major-info.json");
+const majorInfoScript = path.join(ROOT, "scripts", "update_major_info.py");
 
 function readStateFile() {
   try { return JSON.parse(fs.readFileSync(statePath, "utf-8")); }
@@ -33,6 +36,36 @@ function sendJson(res, status, value) {
   res.end(JSON.stringify(value));
 }
 
+function runMajorInfoUpdater() {
+  return new Promise((resolve) => {
+    execFile("python3", [majorInfoScript, "--output", majorInfoPath], {
+      cwd: ROOT,
+      timeout: 25000
+    }, (error, stdout, stderr) => {
+      resolve({
+        ok: !error,
+        stdout: String(stdout || "").trim(),
+        stderr: String(stderr || "").trim(),
+        error: error ? String(error.message || error) : ""
+      });
+    });
+  });
+}
+
+function readMajorInfoFile() {
+  try {
+    return JSON.parse(fs.readFileSync(majorInfoPath, "utf-8"));
+  } catch (e) {
+    return {
+      updatedAt: null,
+      source: "未更新",
+      headlineCount: 0,
+      items: [],
+      note: "重大财经资讯缓存不存在，请点击一键刷新数据。"
+    };
+  }
+}
+
 function createServer(port) {
   return http.createServer((req, res) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
@@ -40,6 +73,20 @@ function createServer(port) {
 
     if (req.method === "OPTIONS") { res.writeHead(204); res.end(); return; }
     if (pathname === "/api/health") { sendJson(res, 200, { ok: true, now: new Date().toISOString() }); return; }
+
+    if (pathname === "/api/major-info") {
+      if (req.method !== "GET") { sendJson(res, 405, { ok: false, error: "method_not_allowed" }); return; }
+      const refresh = url.searchParams.get("refresh") !== "0";
+      if (!refresh) {
+        sendJson(res, 200, { ok: true, refreshed: false, data: readMajorInfoFile() });
+        return;
+      }
+      runMajorInfoUpdater().then((result) => {
+        const data = readMajorInfoFile();
+        sendJson(res, 200, { ok: true, refreshed: result.ok, updater: result, data });
+      });
+      return;
+    }
 
     if (pathname === "/_today_orders") {
       if (req.method === "GET") {

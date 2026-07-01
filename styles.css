@@ -1358,6 +1358,20 @@ button {
   line-height: 1.45;
 }
 
+.major-info-source-line {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.major-info-source-line a {
+  color: var(--accent-strong);
+  text-decoration: none;
+}
+
+.major-info-source-line a:hover {
+  text-decoration: underline;
+}
+
 .major-info-detail,
 .major-info-checks {
   display: grid;
