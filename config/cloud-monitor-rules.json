@@ -8,40 +8,40 @@
       "watchNotify": false
     },
     "300776": {
-      "stopBelow": 208,
-      "stopAction": "帝尔激光跌破208，先卖300股；跌破205继续处理新增仓；跌破198处理剩余仓位",
-      "watchAbove": 226,
-      "watchAction": "帝尔激光冲高到226附近，观察第二笔止盈",
+      "stopBelow": 205,
+      "stopAction": "帝尔激光跌破205，先卖300股；若14:30仍不能收回205，再卖100-200股，只留底仓或清掉新增风险",
+      "watchAbove": 208,
+      "watchAction": "帝尔激光收回208才暂停减仓；收回212并放量才恢复强势",
       "watchNotify": false,
       "takeProfitAbove": 222,
       "takeProfitAction": "帝尔激光冲高到222以上，先卖100-200股锁利润；若继续上冲到226附近再看第二笔止盈"
     },
     "600276": {
-      "stopBelow": 51.5,
-      "stopAction": "恒瑞医药跌破51.5，先卖200股；不能收回51.5或跌回50.8下方继续减",
-      "watchAbove": 53.5,
-      "watchAction": "恒瑞医药放量站稳53.5，趋势增强",
+      "stopBelow": 52.8,
+      "stopAction": "恒瑞医药跌破52.8，减200股保护今日强势利润；跌破51.5继续减",
+      "watchAbove": 54.5,
+      "watchAction": "恒瑞医药站稳54.5，趋势增强；冲55.5附近卖100-200股锁利润",
       "watchNotify": false
     },
     "600406": {
       "stopBelow": 22.55,
-      "stopAction": "国电南瑞跌破22.55，先卖500股；跌破22.3清掉剩余观察仓",
+      "stopAction": "国电南瑞跌破22.55，卖500股；跌破22.3清掉剩余观察仓",
       "watchAbove": 23.5,
       "watchAction": "国电南瑞站稳23.5且电网板块走强，可考虑加300-500股",
       "watchNotify": false
     },
     "000021": {
-      "stopBelow": 65,
-      "stopAction": "深科技失守65，先卖200股锁利润；跌破62.2再减半；跌破61清掉",
-      "watchAbove": 66,
-      "watchAction": "深科技站稳66，存储芯片趋势延续，继续持有",
+      "stopBelow": 61,
+      "stopAction": "深科技跌破61终极风控线，清掉500股，不再等反弹",
+      "watchAbove": 62.2,
+      "watchAction": "深科技重新站回62.2并放量，才重新纳入观察；今天不回补",
       "watchNotify": false
     },
     "002185": {
-      "stopBelow": 22.8,
-      "stopAction": "华天科技跌回22.8下方，先减1000股；跌破22.0再清仓换强",
-      "watchAbove": 23.3,
-      "watchAction": "华天科技重新站稳23.3，封测板块仍强，可保留全仓；24附近分批止盈",
+      "stopBelow": 22,
+      "stopAction": "华天科技跌破22.0，清仓2000股换现金；若无法一次清，至少先卖1000股",
+      "watchAbove": 22.8,
+      "watchAction": "华天科技重新站回22.8且封测板块回暖，才重新观察",
       "watchNotify": false
     }
   },
