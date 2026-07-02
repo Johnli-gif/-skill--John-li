@@ -921,7 +921,6 @@ async function applyPanelSync() {
     if (!response.ok) return;
     const sync = await response.json();
     if (!sync || !sync.updatedAt) return;
-    if (state.panelSync?.updatedAt === sync.updatedAt) return;
 
     const dateKey = sync.dateKey || todayKey();
     const importLabel = sync.importedAt || nowLabel();
@@ -929,13 +928,22 @@ async function applyPanelSync() {
       ? sync.positions.map((position) => recalculatePosition(position))
       : state.positions;
     const trades = Array.isArray(sync.trades) ? sync.trades : [];
+    const syncedSignature = positionTableSignature(positions);
+    const alreadyApplied = state.panelSync?.updatedAt === sync.updatedAt
+      && state.decisionGate.screenshotDateKey === dateKey
+      && state.decisionGate.importDateKey === dateKey
+      && state.decisionGate.positionConfirmDateKey === dateKey
+      && state.decisionGate.positionSignature === syncedSignature
+      && state.decisionGate.quotesDateKey === dateKey
+      && Boolean(state.thsConnection.screenshotName || state.thsConnection.screenshotDataUrl);
+    if (alreadyApplied) return;
 
     state.positions = positions;
     state.account = { ...state.account, ...(sync.account || {}) };
     state.goal = { ...state.goal, ...(sync.goal || {}) };
     state.thsConnection = {
       ...state.thsConnection,
-      screenshotName: sync.holdingsScreenshot?.name || "对话框同步持仓截图",
+      screenshotName: sync.holdingsScreenshot?.name || sync.holdingsEvidenceName || "对话框上传持仓截图（已同步）",
       screenshotImportedAt: importLabel,
       screenshotDataUrl: sync.holdingsScreenshot?.url || state.thsConnection.screenshotDataUrl,
       lastImportAt: importLabel,
@@ -981,7 +989,7 @@ async function applyPanelSync() {
       importConfirmedAt: importLabel,
       positionConfirmDateKey: dateKey,
       positionConfirmedAt: importLabel,
-      positionSignature: positionTableSignature(positions),
+      positionSignature: syncedSignature,
       quotesDateKey: dateKey,
       quotesConfirmedAt: state.quotes.updatedAt
     };
@@ -1491,16 +1499,16 @@ function battleDataGateStatus() {
 
 function buildDataGateBlockReason({ hasPositions, hasScreenshot, hasImport, hasPositionConfirm, hasQuotes, screenshotOnly }) {
   if (!hasScreenshot) {
-    return "请先在首屏导入今天最新的持仓截图。没有最新截图凭证，系统不会显示买卖建议，避免沿用旧持仓。";
+    return "请先在本对话上传今天最新持仓截图并同步到面板；也可用页面上传。没有最新截图凭证，系统不会显示买卖建议，避免沿用旧持仓。";
   }
   if (screenshotOnly) {
     return "已保存持仓截图，但还没有识别成持仓表。请点击“识别截图生成持仓表”，核对后再刷新行情。";
   }
   if (!hasPositions) {
-    return "请先导入最新持仓截图并识别生成持仓表；没有最新持仓表，系统不会用旧数据生成买卖建议。";
+    return "请先在对话框上传最新持仓截图，由我同步成持仓表；或在页面上传并识别。没有最新持仓表，系统不会用旧数据生成买卖建议。";
   }
   if (!hasImport) {
-    return "检测到持仓表，但今天还没有确认它来自最新截图。请重新导入截图并识别后再刷新行情。";
+    return "检测到持仓表，但今天还没有确认它来自最新截图。请在对话框上传最新截图让我同步，或在页面重新导入后再刷新行情。";
   }
   if (!hasPositionConfirm) {
     return "持仓表已导入，但还没有确认它与今天截图一致。请核对表格里的股票、股数、成本后点击确认；确认后再刷新行情。";
@@ -1522,15 +1530,15 @@ function renderBattleDataGate(gate) {
         <div>
           <span>数据确认</span>
           <strong>${gate.ready ? "已基于最新持仓生成建议" : "先确认最新持仓，再看建议"}</strong>
-          <p>今日操作建议只读取本交易日导入的持仓截图、确认过的持仓表和刷新过的公开行情；成交截图可选，未上传默认今天无交易。</p>
+          <p>今日操作建议读取本交易日从对话框同步或页面上传的持仓截图、确认过的持仓表和刷新过的公开行情；成交截图可选，未上传默认今天无交易。</p>
         </div>
 	      <div class="data-gate-actions">
 	        <label class="data-upload-button">
-	          <span>导入持仓截图</span>
+	          <span>页面导入持仓</span>
 	          <input id="battlePortfolioImage" type="file" accept="image/png,image/jpeg,image/webp">
 	        </label>
 	        <label class="data-upload-button">
-	          <span>导入成交截图</span>
+	          <span>页面导入成交</span>
 	          <input id="battleTradeSnapshotImage" type="file" accept="image/png,image/jpeg,image/webp">
 	        </label>
 		        <button class="ghost-button" type="button" data-battle-action="ocr-screenshot" ${gate.hasScreenshotImage ? "" : "disabled"}>识别截图生成持仓表</button>
@@ -4936,7 +4944,8 @@ function updateQuoteGateMeta() {
 }
 
 function confirmPositionTable() {
-  if (!state.thsConnection.screenshotDataUrl || state.decisionGate.screenshotDateKey !== todayKey()) {
+  const hasScreenshotEvidence = Boolean(state.thsConnection.screenshotDataUrl || state.thsConnection.screenshotName);
+  if (!hasScreenshotEvidence || state.decisionGate.screenshotDateKey !== todayKey()) {
     render();
     return;
   }
