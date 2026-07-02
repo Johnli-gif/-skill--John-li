@@ -922,7 +922,7 @@ async function applyPanelSync() {
     const sync = await response.json();
     if (!sync || !sync.updatedAt) return;
 
-    const dateKey = sync.dateKey || todayKey();
+    const dateKey = resolvePanelSyncDateKey(sync);
     const importLabel = sync.importedAt || nowLabel();
     const positions = Array.isArray(sync.positions)
       ? sync.positions.map((position) => recalculatePosition(position))
@@ -1004,6 +1004,20 @@ async function applyPanelSync() {
   } catch (error) {
     console.warn("panel sync skipped", error);
   }
+}
+
+function resolvePanelSyncDateKey(sync) {
+  const currentKey = todayKey();
+  const updatedAt = String(sync?.updatedAt || "");
+  const importedAt = String(sync?.importedAt || "");
+  const currentIsoDate = currentKey.replace(/\//g, "-");
+  const currentSlashDate = currentKey;
+  const currentShortDate = currentKey.slice(5);
+  const looksUpdatedToday = updatedAt.startsWith(currentIsoDate)
+    || importedAt.includes(currentShortDate)
+    || importedAt.includes(currentSlashDate);
+  if (looksUpdatedToday) return currentKey;
+  return sync?.dateKey || currentKey;
 }
 
 async function refreshMajorInfo(options = {}) {
