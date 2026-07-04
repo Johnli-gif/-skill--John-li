@@ -207,56 +207,47 @@ const latestKnownPositions = [
 const defaultIntradayChecks = [
   {
     id: "open-index-risk",
-    slot: "09:45",
-    title: "先判定市场是否允许进攻",
-    condition: "上证不能继续快速跌破4000，创业板不能继续单边下杀；科技主线至少有一个分支红盘承接。",
+    slot: "10:00",
+    title: "先判定市场闸门",
+    condition: "10:00后再看上证/深成、创业板/科创50是否止跌，主线是否有承接。",
     action: "若指数继续弱，只执行减仓和风控，不开新仓。",
-    impact: "决定当天是否维持28%-35%防守仓位。",
+    impact: "决定当天维持现金防守，还是允许小仓试错。",
     level: "risk"
   },
   {
-    id: "open-tongfu-half",
-    slot: "09:45",
-    title: "通富微电70.8硬线",
-    condition: "通富微电跌破70.8，或跌破后5-10分钟不能收回。",
-    action: "减持一半仓位，按约500-600股处理；若放量跌破且弱于封测板块，优先减600股。",
-    impact: "释放约3.6万-4.3万资金，防止亏损仓拖累30天目标。",
+    id: "open-hengrui-defense",
+    slot: "10:00",
+    title: "恒瑞医药防守线",
+    condition: "恒瑞跌破52.0且医药板块同步走弱；若跌破50.8视为核心逻辑转弱。",
+    action: "跌破52.0先减200股；跌破50.8且医药走弱再清仓。",
+    impact: "保护防守成长仓利润，不让盈利仓变亏损。",
     level: "sell"
   },
   {
-    id: "open-glass-confirm",
-    slot: "09:45",
-    title: "玻璃基板/TGV是否继续强",
-    condition: "帝尔激光、蓝思科技、凯盛科技、沃格光电至少2只强于大盘，且没有集体高开低走。",
-    action: "只在确认后考虑围绕帝尔或蓝思做科技修复；未确认则不加仓。",
-    impact: "决定是否把总仓位从28%提高到35%-45%。",
-    level: "buy"
-  },
-  {
-    id: "open-held-profit",
-    slot: "09:45",
-    title: "利润仓先保护",
-    condition: "沪电跌破145，或英维克跌破81.5。",
-    action: "沪电跌破145清100股；英维克跌破81.5减200股。",
-    impact: "保护已有利润，避免科技链一起回撤。",
+    id: "open-nari-defense",
+    slot: "10:00",
+    title: "国电南瑞观察线",
+    condition: "国电南瑞跌破22.30且电网板块走弱；跌破22.10视为防守失败。",
+    action: "跌破22.30减半；跌破22.10清仓。",
+    impact: "控制低波动仓位失效风险。",
     level: "sell"
   },
   {
     id: "close-position-raise",
-    slot: "14:30",
-    title: "是否提高到35%-45%仓位",
-    condition: "指数止跌，玻璃基板或先进封装继续强，持仓未触发硬止损。",
-    action: "满足条件才加仓；优先帝尔回踩186-190企稳或站稳200，次选蓝思确认突破57.5。",
-    impact: "用于第一阶段冲击53万-54.5万，不满足则继续现金等待。",
+    slot: "14:00",
+    title: "是否允许新增试仓",
+    condition: "指数多数止跌，候选赛道和个股同时通过三确认，且不在冷却名单。",
+    action: "满足条件才允许最多3只总持仓；不满足则继续现金等待。",
+    impact: "避免为了补仓位而在弱市随意开新仓。",
     level: "buy"
   },
   {
     id: "close-no-hope-hold",
-    slot: "14:30",
+    slot: "14:00",
     title: "尾盘不靠希望持仓",
-    condition: "通富仍低于70.8、英维克低于81.5、沪电低于145，或帝尔跌破188。",
-    action: "尾盘按硬线处理，不把弱势仓留到隔夜。",
-    impact: "控制隔夜风险，避免第二天被动低开处理。",
+    condition: "持仓跌破硬线、候选未三确认、或当日已卖出的股票出现反抽。",
+    action: "硬线破了处理；候选不达标不买；当日清仓股票只做冷却观察。",
+    impact: "控制隔夜风险，避免卖出后同日买回造成交易噪音。",
     level: "risk"
   }
 ];
@@ -1231,12 +1222,10 @@ function render() {
   refreshIntradayDate();
   bindFormValues();
   renderBattlePlan();
-  renderGoalTracker();
-  renderSizingPlanner();
-  renderIntradayChecklist();
-  renderCloseReview();
+  renderLeanHoldings();
+  renderLeanAlerts();
+  renderLeanNextTrack();
   renderQuoteStatus();
-  renderPortfolio();
   renderSummary();
   saveState();
 }
@@ -1283,37 +1272,245 @@ function renderBattlePlan() {
   const container = document.querySelector("#battlePlan");
   if (!container) return;
 
-  const dataGate = battleDataGateStatus();
-  const dataGateHtml = renderBattleDataGate(dataGate);
-  if (!dataGate.ready) {
-    container.innerHTML = `
-      ${dataGateHtml}
-      <section class="today-action-locked">
-        <strong>今日操作建议暂不生成</strong>
-        <p>${dataGate.blockReason}</p>
-      </section>
-      ${renderMajorInfoPreview(dataGate)}
-    `;
-    return;
-  }
-
-  const stats = goalStats();
   const portfolio = portfolioStats();
   const snapshot = accountSnapshot(portfolio.marketValue);
-  const path = goalPathStats(stats, snapshot);
-  const riskBudget = snapshot.activeAssets * numeric(state.riskPerTrade) / 100;
   const marketGate = marketGateView();
-  const candidates = candidateSizingRows(stats, portfolio, snapshot.cash, riskBudget, marketGate);
-  const todayOrders = buildTodayOrders(stats, portfolio, snapshot, path, candidates, marketGate);
-  const mainAlerts = goalPathAlerts(stats, snapshot, path).slice(0, 2);
+  const actions = buildLeanPositionActions(portfolio);
+  const nextCandidates = leanCandidateActions(marketGate).slice(0, 3);
+  const stance = leanStance(portfolio, snapshot, marketGate, actions, nextCandidates);
 
   container.innerHTML = `
-    ${dataGateHtml}
-    ${renderTodayOrders(todayOrders)}
-    ${renderActionSupportSummary(portfolio, snapshot, path, marketGate, mainAlerts)}
-    ${renderSectorPrepositionRadar(marketGate)}
-    ${renderMajorInfoPreview(dataGate, portfolio)}
+    <section class="lean-gate lean-${marketGate.level}">
+      <div>
+        <span>市场闸门</span>
+        <strong>${escapeAttribute(marketGate.shortLabel || marketGate.title)}</strong>
+        <p>${escapeAttribute(marketGate.detail)}</p>
+      </div>
+      <b>${escapeAttribute(marketGate.metrics || "指数待刷新")}</b>
+    </section>
+    <section class="lean-decision lean-${stance.level}">
+      <div>
+        <span>最终结论</span>
+        <strong>${escapeAttribute(stance.title)}</strong>
+        <p>${escapeAttribute(stance.detail)}</p>
+      </div>
+      <div class="lean-stats">
+        <span>总资产 ${formatMoney(snapshot.estimatedAssets)}</span>
+        <span>仓位 ${portfolio.exposure.toFixed(1)}%</span>
+        <span>现金 ${formatMoney(snapshot.cash)}</span>
+      </div>
+    </section>
+    <section class="lean-action-table">
+      ${actions.map(renderLeanActionRow).join("") || renderLeanEmpty("当前没有有效持仓。")}
+    </section>
+    <section class="lean-buy-strip">
+      <strong>今日买入清单</strong>
+      <p>${nextCandidates.length ? "仅当市场闸门允许且候选股触发价成立时执行；当前已有3只以内持仓约束，新增前优先腾仓。" : "暂无满足条件的新买入。现金等待。"} </p>
+      <div>${nextCandidates.map(renderLeanCandidatePill).join("") || "<span>无</span>"}</div>
+    </section>
   `;
+}
+
+function buildLeanPositionActions(portfolio) {
+  return activePositions().map((position) => {
+    const quote = quoteForCode(position.code);
+    const price = quote ? numeric(quote.price) : numeric(position.currentPrice);
+    const signalView = evaluatePositionSignal(position, quote);
+    const pnlRate = positionPnlRate(position, price);
+    const level = signalView.level === "danger" ? "danger" : signalView.level === "watch" ? "watch" : "ok";
+    const action = battleActionLabel(signalView);
+    const value = numeric(position.marketValue) || price * numeric(position.quantity);
+    const weight = portfolio.marketValue ? value / portfolio.marketValue * 100 : 0;
+    return {
+      position,
+      quote,
+      price,
+      pnlRate,
+      level,
+      action,
+      title: signalView.title,
+      detail: signalView.detail,
+      weight
+    };
+  }).sort((a, b) => {
+    const levelScore = { danger: 3, watch: 2, ok: 1 };
+    return (levelScore[b.level] || 0) - (levelScore[a.level] || 0) || b.weight - a.weight;
+  });
+}
+
+function leanStance(portfolio, snapshot, marketGate, actions, candidates) {
+  const danger = actions.filter((item) => item.level === "danger");
+  if (danger.length) {
+    return {
+      level: "danger",
+      title: "先降风险，不急开新仓",
+      detail: `已有${danger.length}只持仓触发风控或硬线，先按持仓股逐条处理。`
+    };
+  }
+  if (!marketGate.canOpenNew) {
+    return {
+      level: marketGate.level,
+      title: "新仓暂停，持仓按线拿",
+      detail: "市场闸门未打开，候选方向只做观察，避免弱市追反弹。"
+    };
+  }
+  if (portfolio.exposure >= 80) {
+    return {
+      level: "watch",
+      title: "仓位偏高，先不扩张",
+      detail: "即使有新机会，也应先换弱留强，不继续摊大持仓面。"
+    };
+  }
+  if (candidates.some((item) => item.signal.level === "ok")) {
+    return {
+      level: "ok",
+      title: "可小仓试错强候选",
+      detail: "市场允许进攻且候选有触发项，但仍坚持最多3只持仓，新增前先确认是否需要换弱。"
+    };
+  }
+  return {
+    level: "neutral",
+    title: "持仓观察，现金等待",
+    detail: "当前不为了交易而交易，只等右侧确认或错杀优质股机会。"
+  };
+}
+
+function renderLeanActionRow(item) {
+  const position = item.position;
+  const pnl = numeric(position.pnl);
+  return `
+    <article class="lean-action-row lean-${item.level}">
+      <div class="lean-action-main">
+        <strong>${escapeAttribute(position.name)} ${escapeAttribute(position.code)}</strong>
+        <p>${escapeAttribute(item.title)}：${escapeAttribute(item.detail)}</p>
+        <div class="lean-mini-meta">
+          <span>持仓 ${numeric(position.quantity)}股</span>
+          <span>成本 ${formatPrice(position.cost)}</span>
+          <span>现价 ${item.price ? formatPrice(item.price) : "--"}</span>
+          <span>盈亏 ${formatSigned(pnl)} / ${formatSigned(item.pnlRate)}%</span>
+        </div>
+      </div>
+      <b>${escapeAttribute(item.action)}</b>
+    </article>
+  `;
+}
+
+function renderLeanHoldings() {
+  const container = document.querySelector("#leanHoldings");
+  if (!container) return;
+  const portfolio = portfolioStats();
+  const positions = activePositions();
+  const snapshot = accountSnapshot(portfolio.marketValue);
+  if (!positions.length) {
+    container.innerHTML = renderLeanEmpty("当前无有效持仓，等待下一次截图同步。");
+    return;
+  }
+  container.innerHTML = `
+    <div class="lean-summary-grid">
+      <article><span>总资产</span><strong>${formatMoney(snapshot.estimatedAssets)}</strong></article>
+      <article><span>持仓市值</span><strong>${formatMoney(portfolio.marketValue)}</strong></article>
+      <article><span>现金</span><strong>${formatMoney(snapshot.cash)}</strong></article>
+      <article><span>持仓数</span><strong>${positions.length}/3</strong></article>
+    </div>
+    <div class="lean-holding-grid">
+      ${positions.map((position) => {
+        const quote = quoteForCode(position.code);
+        const price = quote ? numeric(quote.price) : numeric(position.currentPrice);
+        const pnlRate = positionPnlRate(position, price);
+        return `
+          <article class="lean-holding-card">
+            <strong>${escapeAttribute(position.name)} <span>${escapeAttribute(position.code)}</span></strong>
+            <div>
+              <span>${numeric(position.quantity)}股</span>
+              <span>成本 ${formatPrice(position.cost)}</span>
+              <span>现价 ${price ? formatPrice(price) : "--"}</span>
+              <span>盈亏 ${formatSigned(numeric(position.pnl))} / ${formatSigned(pnlRate)}%</span>
+            </div>
+            <p>${escapeAttribute(position.plan || position.stop || "按今日最终建议执行。")}</p>
+          </article>
+        `;
+      }).join("")}
+    </div>
+  `;
+}
+
+function renderLeanAlerts() {
+  const container = document.querySelector("#leanAlerts");
+  if (!container) return;
+  const portfolio = portfolioStats();
+  const actions = buildLeanPositionActions(portfolio);
+  const dangerOrWatch = actions.filter((item) => item.level !== "ok");
+  const cloud = state.cloudMonitor || {};
+  const statusText = cloud.enabled === false ? "云端提醒未启用" : "云端按交易日早8点/下午2点刷新；仅真实触发买卖条件时发邮件。";
+  container.innerHTML = `
+    <div class="lean-alert-head">
+      <strong>${escapeAttribute(statusText)}</strong>
+      <span>本地行情时间：${escapeAttribute(state.quotes.updatedAt || state.goal.lastUpdated || "未刷新")}</span>
+    </div>
+    <div class="lean-alert-list">
+      ${dangerOrWatch.map((item) => `
+        <article class="lean-alert-row lean-${item.level}">
+          <strong>${escapeAttribute(item.position.name)} ${escapeAttribute(item.action)}</strong>
+          <p>${escapeAttribute(item.detail)}</p>
+        </article>
+      `).join("") || renderLeanEmpty("当前持仓没有明显硬触发；按计划观察。")}
+    </div>
+  `;
+}
+
+function renderLeanNextTrack() {
+  const container = document.querySelector("#leanNextTrack");
+  if (!container) return;
+  const marketGate = marketGateView();
+  const candidates = leanCandidateActions(marketGate).slice(0, 5);
+  container.innerHTML = `
+    <div class="lean-track-head">
+      <strong>${marketGate.canOpenNew ? "市场允许时只做前排确认" : "市场未确认，候选只观察"}</strong>
+      <p>候选池来自全局赛道，不局限当前持仓；买入前必须满足右侧确认、成交承接和最多3只持仓约束。</p>
+    </div>
+    <div class="lean-candidate-grid">
+      ${candidates.map((item) => `
+        <article class="lean-candidate-card lean-${item.signal.level}">
+          <strong>${escapeAttribute(item.name)} <span>${escapeAttribute(item.code)}</span></strong>
+          <p>${escapeAttribute(item.track)}｜${escapeAttribute(item.signal.title)}｜${escapeAttribute(item.expectedMove || "")}｜概率${numeric(item.probability)}%</p>
+          <em>${escapeAttribute(item.reason)}</em>
+        </article>
+      `).join("") || renderLeanEmpty("暂无候选。")}
+    </div>
+  `;
+}
+
+function leanCandidateActions(marketGate = marketGateView()) {
+  const heldCodes = new Set(activePositions().map((position) => normalizeCode(position.code)));
+  return rankedBuyCandidates().filter((candidate) => !heldCodes.has(normalizeCode(candidate.code))).map((candidate) => {
+    const quote = quoteForCode(candidate.code);
+    const signalView = evaluateCandidateSignal(candidate, quote);
+    const adjustedLevel = marketGate.canOpenNew ? signalView.level : signalView.level === "danger" ? "danger" : "watch";
+    return {
+      ...candidate,
+      quote,
+      signal: { ...signalView, level: adjustedLevel }
+    };
+  }).sort((a, b) => {
+    const levelScore = { ok: 3, watch: 2, neutral: 1, danger: 0 };
+    return (levelScore[b.signal.level] || 0) - (levelScore[a.signal.level] || 0) || candidateUniverseScore(b) - candidateUniverseScore(a);
+  });
+}
+
+function renderLeanCandidatePill(item) {
+  const quote = item.quote;
+  const price = quote ? `现价${formatPrice(quote.price)}` : "待刷新";
+  return `<span>${escapeAttribute(item.name)} ${escapeAttribute(item.signal.title)} ${escapeAttribute(price)}</span>`;
+}
+
+function renderLeanEmpty(text) {
+  return `<article class="lean-empty">${escapeAttribute(text)}</article>`;
+}
+
+function positionPnlRate(position, price = numeric(position.currentPrice)) {
+  const cost = numeric(position.cost);
+  if (cost > 0 && price > 0) return (price - cost) / cost * 100;
+  return numeric(position.pnlRate);
 }
 
 function renderActionSupportSummary(portfolio, snapshot, path, marketGate, alerts = []) {
@@ -1813,7 +2010,7 @@ function goalCommandTitle(snapshot, path, marketGate, executableRows, highConvic
   if (snapshot.floorGap <= 8000) return "防守优先，停止新仓";
   if (!marketGate.canOpenNew) return "目标仍在，但今天不进攻";
   if (!executableRows.length) return "目标缺口不靠追高补";
-  if (highConviction) return "极高确定性才允许重仓";
+  if (highConviction) return "80分以上信号才允许提高仓位";
   if (path.gap < -5000) return "落后路径，只做触发修复";
   return "按触发价小步推进目标";
 }
@@ -1848,7 +2045,7 @@ function goalCommandDetail(stats, snapshot, path, marketGate, executableRows, hi
     return `离目标仍差${formatMoney(snapshot.targetGap)}，但没有候选股同时满足触发价、风险预算和市场闸门。`;
   }
   if (highConviction) {
-    return `候选股达到80%+高确定性条件，允许把进攻上限提高到${allowedExposure}%，但仍按止损价反推股数。`;
+    return `候选股综合信号评分达到80分以上，允许把进攻上限提高到${allowedExposure}%，但仍按止损价反推股数。`;
   }
   if (path.gap < -5000) {
     return `当前落后今日路径${formatMoney(Math.abs(path.gap))}，只能用触发后的试仓修复，不允许直接追到70%-80%。`;
@@ -1873,7 +2070,7 @@ function goalCommandSteps(snapshot, path, marketGate, executableRows, buyBudget,
   }
   if (!marketGate.canOpenNew) {
     return [
-      "9:45和14:30只检查持仓硬线。",
+      "10:00前只观察，14:00只检查持仓硬线。",
       "候选买入全部降为观察。",
       "等上证/深成和创业板/科创50至少多数止跌后再恢复试仓。"
     ];
@@ -2703,7 +2900,7 @@ function renderTodayOrders(todayOrders) {
             <div>
               <span>执行指令</span>
               <strong>暂无直接可执行订单</strong>
-              <p>持仓未触硬卖线，候选股也未进入触发区；按9:45和14:30检查清单执行。</p>
+              <p>持仓未触硬卖线，候选股也未进入触发区；按10:00后确认和14:00风险复核执行。</p>
             </div>
             <b>等待</b>
           </article>
@@ -3188,7 +3385,7 @@ function buildBattleStance(portfolio, snapshot, path, positionActions, candidate
   return {
     level: "neutral",
     title: "默认观察，现金等待",
-    detail: "开盘先刷新行情，9:45确认指数和科技主线，再决定是否提高仓位。"
+    detail: "开盘先刷新行情，10:00后确认指数和主线承接，再决定是否提高仓位。"
   };
 }
 
@@ -3283,7 +3480,7 @@ function renderGoalTracker() {
     </div>
     <div class="goal-rules">
       <span><b>进攻条件：</b>指数止跌、科技主线至少两个分支共振、持仓票不破硬止损。</span>
-      <span><b>加仓节奏：</b>35%-45%验证，50%-70%扩大战果，80%只给极高确定性机会。</span>
+      <span><b>加仓节奏：</b>30%-50%常规验证，60%-80%只给综合信号80分以上且风控明确的机会。</span>
       <span><b>失败处理：</b>单票触发止损先退出，不用补仓摊低成本。</span>
     </div>
   `;
@@ -4509,7 +4706,7 @@ function marketGateView() {
     title: "市场还未确认",
     shortLabel: "等待确认",
     canOpenNew: false,
-    detail: "指数分化，暂时不把候选触发价当作买入指令，等9:45或尾盘确认。",
+    detail: "指数分化，暂时不把候选触发价当作买入指令，等10:00后或14:00风险复核确认。",
     metrics,
     score: 50
   };
@@ -4820,7 +5017,7 @@ function positionDisciplineSignal(position, price) {
     return signal(
       "danger",
       "盈利超20%保护",
-      `当前盈利约${formatSigned(pnlRate)}%，原则上先减半保护利润；只有未来一周10%以上空间且概率超过70%才继续满仓位拿。`
+      `当前盈利约${formatSigned(pnlRate)}%，原则上先减半保护利润；只有未来一周10%以上空间且概率超过70%才继续按核心趋势仓拿。`
     );
   }
   return null;
