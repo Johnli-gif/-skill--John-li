@@ -25,6 +25,7 @@ ROOT = Path(__file__).resolve().parents[1]
 TRADING_STATE = ROOT / "data" / "trading-state.json"
 DECISION_LATEST = ROOT / "data" / "decision-latest.json"
 ALERT_STATE = ROOT / "data" / "cloud-monitor" / "state.json"
+SUMMARY_STATE = ROOT / "data" / "cloud-monitor" / "summary-state.json"
 TZ = ZoneInfo("Asia/Shanghai")
 
 
@@ -81,6 +82,7 @@ def load_json(path: Path, default: Any) -> Any:
 def save_json(path: Path, data: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    path.chmod(0o600)
 
 
 def numeric(value: Any, default: float = 0.0) -> float:
@@ -143,15 +145,21 @@ def fetch_tencent_quotes(codes: list[str]) -> dict[str, dict[str, Any]]:
     return quotes
 
 
-def state_allows_buy(state: dict[str, Any]) -> tuple[bool, str]:
+def state_allows_buy(state: dict[str, Any], current: datetime | None = None) -> tuple[bool, str]:
+    current = current or now()
     risk = state.get("risk", {})
     freshness = state.get("data_freshness", {})
+    value = current.hour * 100 + current.minute
+    if current.weekday() >= 5 or not (1005 <= value <= 1135 or 1255 <= value <= 1500):
+        return False, "buy alerts are disabled before the scheduled morning scan or outside continuous trading"
     if risk.get("mode") not in {"normal", "probation"}:
         return False, f"risk mode is {risk.get('mode', 'unknown')}"
     if not risk.get("new_buys_allowed") or risk.get("new_buy_vetoes"):
         return False, "account risk veto is active"
     if freshness.get("status") != "current":
         return False, "trading state is stale or missing"
+    if int(numeric(freshness.get("completed_sessions_since"))) > 0:
+        return False, "trading state is older than the latest completed session"
     return True, "account state permits the approved trigger"
 
 
@@ -175,9 +183,25 @@ def confirmation_allows(trigger: dict[str, Any], quote: dict[str, Any], current:
     return True, "盘中价格触发"
 
 
-def approved_price_triggers(state: dict[str, Any], view: dict[str, Any]) -> list[dict[str, Any]]:
+def trigger_is_current(valid_until: Any, current: datetime | None = None) -> bool:
+    current = current or now()
+    if not valid_until:
+        return False
+    try:
+        expiry = datetime.fromisoformat(str(valid_until)[:10]).date()
+    except ValueError:
+        return False
+    return current.date() <= expiry
+
+
+def approved_price_triggers(state: dict[str, Any], view: dict[str, Any], current: datetime | None = None) -> list[dict[str, Any]]:
+    current = current or now()
     result: list[dict[str, Any]] = []
-    buy_allowed, buy_reason = state_allows_buy(state)
+    buy_allowed, buy_reason = state_allows_buy(state, current)
+    available_by_code = {
+        normalize_code(item.get("code")): int(numeric(item.get("available_quantity")))
+        for item in state.get("account", {}).get("positions", [])
+    }
     for decision in view.get("decisions", []):
         if not decision.get("approved") or not decision.get("active") or not decision.get("code"):
             continue
@@ -188,44 +212,63 @@ def approved_price_triggers(state: dict[str, Any], view: dict[str, Any]) -> list
             continue
         for item in prices:
             level = str(item.get("level") or ("buy" if action in {"买入", "试仓"} else "sell" if action in {"减仓", "止盈", "止损"} else "watch"))
+            valid_until = item.get("valid_until") or decision.get("valid_until") or ""
+            if not trigger_is_current(valid_until, current):
+                continue
             if level == "buy" and not buy_allowed:
                 continue
+            code = normalize_code(decision["code"])
+            requested = int(numeric(item.get("quantity") or decision.get("quantity")))
+            if level == "buy" and (requested <= 0 or requested % 100 != 0):
+                continue
+            if level in {"sell", "watch"}:
+                available = available_by_code.get(code, 0)
+                if available <= 0:
+                    continue
+                requested = min(requested or available, available)
             result.append({
                 **item,
                 "level": level,
-                "code": normalize_code(decision["code"]),
+                "code": code,
                 "name": decision.get("name") or decision["code"],
                 "action": item.get("action") or action,
                 "decision_id": decision.get("decision_id"),
                 "gate_reason": buy_reason if level == "buy" else "approved risk-management trigger",
                 "confirmation": item.get("confirmation", "intraday"),
-                "quantity": item.get("quantity") or decision.get("quantity"),
-                "valid_until": item.get("valid_until") or "",
+                "quantity": requested,
+                "valid_until": valid_until,
             })
     return result
 
 
-def evaluate_approved_triggers(state: dict[str, Any], view: dict[str, Any], quotes: dict[str, dict[str, Any]]) -> list[Alert]:
+def evaluate_approved_triggers(
+    state: dict[str, Any],
+    view: dict[str, Any],
+    quotes: dict[str, dict[str, Any]],
+    current: datetime | None = None,
+) -> list[Alert]:
+    current = current or now()
     alerts: list[Alert] = []
-    for trigger in approved_price_triggers(state, view):
+    for trigger in approved_price_triggers(state, view, current):
         quote = quotes.get(trigger["code"]) or {}
-        if not quote_is_current_session(quote):
+        if not quote_is_current_session(quote, current):
             continue
-        current = numeric(quote.get("price"))
+        price = numeric(quote.get("price"))
         threshold = numeric(trigger.get("price"))
         operator = trigger.get("operator")
-        hit = current > 0 and threshold > 0 and ((operator == ">=" and current >= threshold) or (operator == "<=" and current <= threshold))
-        confirmation_ok, confirmation_reason = confirmation_allows(trigger, quote)
+        hit = price > 0 and threshold > 0 and ((operator == ">=" and price >= threshold) or (operator == "<=" and price <= threshold))
+        confirmation_ok, confirmation_reason = confirmation_allows(trigger, quote, current)
         if not hit or not confirmation_ok:
             continue
         alerts.append(Alert(
-            level=trigger["level"], code=trigger["code"], name=trigger["name"], price=current,
+            level=trigger["level"], code=trigger["code"], name=trigger["name"], price=price,
             rule_price=threshold, action=trigger["action"],
-            reason=f"approved decision {trigger['decision_id']}: {current:.2f} {operator} {threshold:.2f}; {confirmation_reason}; {trigger['gate_reason']}",
+            reason=f"approved decision {trigger['decision_id']}: {price:.2f} {operator} {threshold:.2f}; {confirmation_reason}; {trigger['gate_reason']}",
             decision_id=trigger["decision_id"], confirmation=trigger["confirmation"],
             quantity=int(numeric(trigger.get("quantity"))) or None, valid_until=trigger.get("valid_until", ""),
         ))
-    return alerts
+    confirmed = {(item.code, item.rule_price) for item in alerts if item.level == "sell"}
+    return [item for item in alerts if not (item.level == "watch" and (item.code, item.rule_price) in confirmed)]
 
 
 def build_message(panel: dict[str, Any], gate: dict[str, Any], alerts: list[Alert]) -> tuple[str, str, str, str]:
@@ -259,7 +302,31 @@ def build_message(panel: dict[str, Any], gate: dict[str, Any], alerts: list[Aler
     return title, "\n".join(plain), "\n".join(markdown), sms[:180]
 
 
-def build_decision_summary(state: dict[str, Any], view: dict[str, Any]) -> tuple[str, str, str, str]:
+def decision_summary_signature(state: dict[str, Any], view: dict[str, Any]) -> str:
+    risk = state.get("risk", {})
+    payload = {
+        "decision_ids": sorted(
+            str(item.get("decision_id"))
+            for item in view.get("decisions", [])
+            if item.get("approved") and item.get("active")
+        ),
+        "market_gate": view.get("market_gate"),
+        "data_as_of": view.get("data_as_of") or state.get("data_as_of"),
+        "risk": {
+            "mode": risk.get("mode"),
+            "new_buys_allowed": risk.get("new_buys_allowed"),
+            "cooldown_sessions_remaining": risk.get("cooldown_sessions_remaining"),
+            "new_buy_vetoes": sorted(risk.get("new_buy_vetoes") or []),
+        },
+        "positions": sorted(
+            (normalize_code(item.get("code")), int(numeric(item.get("quantity"))), int(numeric(item.get("available_quantity"))))
+            for item in state.get("account", {}).get("positions", [])
+        ),
+    }
+    return hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:20]
+
+
+def build_decision_summary(state: dict[str, Any], view: dict[str, Any], has_new_state: bool = True) -> tuple[str, str, str, str]:
     """Format the latest state-engine output; this function never creates a trade decision."""
     account = state.get("account", {})
     risk = state.get("risk", {})
@@ -289,7 +356,7 @@ def build_decision_summary(state: dict[str, Any], view: dict[str, Any]) -> tuple
             label = change_labels.get(str(value), str(value))
             if label not in changes:
                 changes.append(label)
-    change_text = "、".join(changes) if changes else "无实质变化，维持原计划"
+    change_text = "、".join(changes) if has_new_state and changes else "无实质变化，维持原计划"
 
     plain = [
         title,
@@ -425,19 +492,25 @@ def main() -> int:
     state = load_json(Path(env("TRADING_STATE_PATH", str(TRADING_STATE))), {})
     view = load_json(Path(env("DECISION_LATEST_PATH", str(DECISION_LATEST))), {})
     if args.send_decision_summary:
-        title, plain, markdown, sms = build_decision_summary(state, view)
+        summary_path = Path(env("SUMMARY_STATE_FILE", str(SUMMARY_STATE)))
+        signature = decision_summary_signature(state, view)
+        prior_summary = load_json(summary_path, {})
+        title, plain, markdown, sms = build_decision_summary(state, view, signature != prior_summary.get("last_signature"))
         channels = notify_all(title, plain, markdown, sms, args.dry_run)
+        if channels and not args.dry_run:
+            save_json(summary_path, {"last_signature": signature, "last_sent_at": now().isoformat()})
         print(f"channels: {','.join(channels) if channels else 'none configured'}")
         return 0 if channels else 1
     if not args.ignore_trading_time and env("TRADE_HOURS_ONLY", "true").lower() == "true" and not is_trading_time():
         print("outside trading hours")
         return 0
-    triggers = approved_price_triggers(state, view)
+    current = now()
+    triggers = approved_price_triggers(state, view, current)
     if not triggers:
         print("no approved actionable price triggers")
         return 0
     quotes = fetch_tencent_quotes([item["code"] for item in triggers])
-    alerts = evaluate_approved_triggers(state, view, quotes)
+    alerts = evaluate_approved_triggers(state, view, quotes, current)
     if not should_send(alerts, args.force):
         print("no new triggered alerts")
         return 0
