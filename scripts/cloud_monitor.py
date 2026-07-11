@@ -1,19 +1,9 @@
 #!/usr/bin/env python3
-"""
-Cloud A-share monitor.
-
-Reads the latest structured holdings from data/panel-sync.json, refreshes public
-Tencent quotes, evaluates explicit price/risk trigger rules, and sends alerts
-through configured notification channels. It is a public-quote rule monitor, not
-a full AI trading committee or broker account reader.
-"""
+"""Price-only monitor for decisions approved by 操盘策略0710."""
 from __future__ import annotations
 
 import argparse
-import base64
-import email.utils
 import hashlib
-import hmac
 import json
 import os
 import re
@@ -32,18 +22,10 @@ from zoneinfo import ZoneInfo
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PANEL_SYNC = ROOT / "data" / "panel-sync.json"
-RULES_PATH = ROOT / "config" / "cloud-monitor-rules.json"
-STATE_PATH = ROOT / "data" / "cloud-monitor" / "state.json"
+TRADING_STATE = ROOT / "data" / "trading-state.json"
+DECISION_LATEST = ROOT / "data" / "decision-latest.json"
+ALERT_STATE = ROOT / "data" / "cloud-monitor" / "state.json"
 TZ = ZoneInfo("Asia/Shanghai")
-
-
-INDEX_SYMBOLS = {
-    "sh000001": {"name": "上证", "role": "broad"},
-    "sz399001": {"name": "深成", "role": "broad"},
-    "sz399006": {"name": "创业板", "role": "style"},
-    "sh000688": {"name": "科创50", "role": "style"},
-}
 
 
 @dataclass
@@ -55,22 +37,38 @@ class Alert:
     action: str
     reason: str
     rule_price: float | None = None
+    decision_id: str = ""
+    confirmation: str = "intraday"
+    quantity: int | None = None
+    valid_until: str = ""
 
     def signature(self) -> str:
-        src = f"{self.level}|{self.code}|{self.action}|{self.rule_price}"
-        return hashlib.sha256(src.encode("utf-8")).hexdigest()[:16]
+        value = f"{self.decision_id}|{self.level}|{self.code}|{self.action}|{self.rule_price}|{self.quantity}"
+        return hashlib.sha256(value.encode()).hexdigest()[:16]
 
 
 def env(name: str, default: str = "") -> str:
     return os.environ.get(name, default).strip()
 
 
+def load_runtime_env() -> None:
+    """Load local/server env files without overriding injected secrets."""
+    candidates = [ROOT / ".env", Path("/etc/ashare-monitor.env")]
+    for path in candidates:
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except FileNotFoundError:
+            continue
+        for line in lines:
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#") or "=" not in stripped:
+                continue
+            key, value = stripped.split("=", 1)
+            os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
 def now() -> datetime:
     return datetime.now(TZ)
-
-
-def now_label() -> str:
-    return now().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def load_json(path: Path, default: Any) -> Any:
@@ -78,8 +76,6 @@ def load_json(path: Path, default: Any) -> Any:
         return json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return default
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"JSON格式错误: {path}: {exc}") from exc
 
 
 def save_json(path: Path, data: Any) -> None:
@@ -87,30 +83,16 @@ def save_json(path: Path, data: Any) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def is_trading_time(dt: datetime | None = None) -> bool:
-    dt = dt or now()
-    if dt.weekday() >= 5:
-        return False
-    hm = dt.hour * 100 + dt.minute
-    return 925 <= hm <= 1135 or 1255 <= hm <= 1505
+def numeric(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
-def is_scheduled_checkpoint(dt: datetime | None = None) -> bool:
-    dt = dt or now()
-    if dt.weekday() >= 5:
-        return False
-    hm = dt.hour * 100 + dt.minute
-    return 755 <= hm <= 805 or 1355 <= hm <= 1405
-
-
-def can_send_production_alerts(dt: datetime | None = None) -> bool:
-    """Avoid sending trade emails from stale pre-market quote snapshots."""
-    return is_trading_time(dt)
-
-
-def normalize_code(code: str) -> str:
-    code = re.sub(r"\D", "", str(code or ""))
-    return code.zfill(6)[-6:]
+def normalize_code(value: Any) -> str:
+    digits = re.sub(r"\D", "", str(value or ""))
+    return digits[-6:].zfill(6) if digits else ""
 
 
 def quote_symbol(code: str) -> str:
@@ -122,581 +104,349 @@ def quote_symbol(code: str) -> str:
     return f"sz{code}"
 
 
-def numeric(value: Any, default: float = 0.0) -> float:
-    try:
-        if value is None or value == "":
-            return default
-        return float(value)
-    except (TypeError, ValueError):
-        return default
+def is_trading_time(dt: datetime | None = None) -> bool:
+    dt = dt or now()
+    if dt.weekday() >= 5:
+        return False
+    value = dt.hour * 100 + dt.minute
+    return 925 <= value <= 1135 or 1255 <= value <= 1505
 
 
 def http_get(url: str, timeout: int = 10) -> str:
-    request = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": "Mozilla/5.0 cloud-ashare-monitor",
-            "Referer": "https://finance.qq.com/",
-        },
-    )
+    request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 ashare-approved-trigger", "Referer": "https://finance.qq.com/"})
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return response.read().decode("gbk", errors="ignore")
 
 
 def fetch_tencent_quotes(codes: list[str]) -> dict[str, dict[str, Any]]:
     symbols = sorted({quote_symbol(code) for code in codes if normalize_code(code)})
-    symbols.extend(symbol for symbol in INDEX_SYMBOLS if symbol not in symbols)
     if not symbols:
         return {}
-    quotes: dict[str, dict[str, Any]] = {}
-    chunk_size = 4
-    def fetch_raw(chunk: list[str], attempts: int = 3) -> tuple[str, Exception | None]:
-        raw = ""
-        last_error: Exception | None = None
-        for _attempt in range(attempts):
-            query = f"q={','.join(chunk)}&_={int(time.time() * 1000)}"
-            for scheme in ("https", "http"):
-                try:
-                    raw = http_get(f"{scheme}://qt.gtimg.cn/{query}")
-                    return raw, None
-                except Exception as exc:
-                    last_error = exc
+    raw = ""
+    for attempt in range(3):
+        try:
+            raw = http_get(f"https://qt.gtimg.cn/q={','.join(symbols)}&_={int(time.time() * 1000)}")
+            break
+        except Exception:
+            if attempt == 2:
+                raise
             time.sleep(0.4)
-        return raw, last_error
-
-    for start in range(0, len(symbols), chunk_size):
-        chunk = symbols[start:start + chunk_size]
-        raw, last_error = fetch_raw(chunk)
-        if not raw:
-            raw_parts = []
-            for symbol in chunk:
-                symbol_raw, last_error = fetch_raw([symbol], attempts=2)
-                if symbol_raw:
-                    raw_parts.append(symbol_raw)
-                else:
-                    print(f"[WARN] quote symbol failed {symbol}: {last_error}", file=sys.stderr)
-            raw = "".join(raw_parts)
-        if not raw:
+    quotes: dict[str, dict[str, Any]] = {}
+    for match in re.finditer(r'v_([^=]+)="([^"]*)";', raw):
+        parts = match.group(2).split("~")
+        if len(parts) < 35:
             continue
-        for match in re.finditer(r'v_([^=]+)="([^"]*)";', raw):
-            symbol, body = match.group(1), match.group(2)
-            parts = body.split("~")
-            if len(parts) < 35:
-                continue
-            code = normalize_code(parts[2] or symbol)
-            price = numeric(parts[3])
-            if not code or price <= 0:
-                continue
-            quote = {
-                "symbol": symbol,
-                "code": code,
-                "name": parts[1] or code,
-                "price": price,
-                "prevClose": numeric(parts[4]),
-                "open": numeric(parts[5]),
-                "time": parts[30] or "",
-                "change": numeric(parts[31]),
-                "pct": numeric(parts[32]),
-                "high": numeric(parts[33]),
-                "low": numeric(parts[34]),
-            }
-            quotes[code] = quote
-            if symbol in INDEX_SYMBOLS:
-                quotes[symbol] = quote
+        code = normalize_code(parts[2])
+        price = numeric(parts[3])
+        if code and price > 0:
+            quotes[code] = {"code": code, "name": parts[1] or code, "price": price, "time": parts[30] or "", "pct": numeric(parts[32])}
     return quotes
 
 
-def market_gate(quotes: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    index_quotes = []
-    for symbol, meta in INDEX_SYMBOLS.items():
-        quote = quotes.get(symbol)
-        if quote:
-            index_quotes.append({**quote, **meta})
-    broad = [q for q in index_quotes if q["role"] == "broad"]
-    style = [q for q in index_quotes if q["role"] == "style"]
-    broad_avg = sum(q["pct"] for q in broad) / max(1, len(broad))
-    style_avg = sum(q["pct"] for q in style) / max(1, len(style))
-    positive = sum(1 for q in index_quotes if q["pct"] > 0)
-    if broad_avg <= -0.7 or style_avg <= -1.0:
-        status = "closed"
-        title = "市场闸门关闭"
-    elif positive >= 3 and style_avg >= 0.3:
-        status = "open"
-        title = "市场允许进攻"
-    elif positive >= 2 and style_avg >= 0:
-        status = "trial"
-        title = "市场可小仓试错"
-    else:
-        status = "watch"
-        title = "市场还未确认"
-    metrics = "｜".join(f"{q['name']}{q['pct']:+.2f}%" for q in index_quotes)
-    return {"status": status, "title": title, "metrics": metrics, "can_buy": status in {"open", "trial"}}
+def state_allows_buy(state: dict[str, Any]) -> tuple[bool, str]:
+    risk = state.get("risk", {})
+    freshness = state.get("data_freshness", {})
+    if risk.get("mode") not in {"normal", "probation"}:
+        return False, f"risk mode is {risk.get('mode', 'unknown')}"
+    if not risk.get("new_buys_allowed") or risk.get("new_buy_vetoes"):
+        return False, "account risk veto is active"
+    if freshness.get("status") != "current":
+        return False, "trading state is stale or missing"
+    return True, "account state permits the approved trigger"
 
 
-def extract_numbers(text: str) -> list[float]:
-    return [numeric(item) for item in re.findall(r"(?<!\d)(\d{1,4}(?:\.\d+)?)(?!\d)", text or "")]
+def quote_is_current_session(quote: dict[str, Any], current: datetime | None = None) -> bool:
+    current = current or now()
+    digits = re.sub(r"\D", "", str(quote.get("time") or ""))
+    return len(digits) >= 8 and digits[:8] == current.strftime("%Y%m%d")
 
 
-def first_clause(text: str) -> str:
-    return re.split(r"[；;。]", text or "", maxsplit=1)[0].strip() or text or ""
+def confirmation_allows(trigger: dict[str, Any], quote: dict[str, Any], current: datetime | None = None) -> tuple[bool, str]:
+    current = current or now()
+    confirmation = trigger.get("confirmation", "intraday")
+    if confirmation == "intraday_emergency":
+        return True, "盘中紧急触发"
+    if confirmation == "close_confirmation":
+        if current.hour * 100 + current.minute < 1450:
+            return False, "等待14:50后的收盘确认窗口"
+        return True, "14:50后收盘确认窗口"
+    if confirmation == "two_close_confirmation":
+        return False, "连续两日收盘确认必须由状态引擎复核"
+    return True, "盘中价格触发"
 
 
-def is_sell_action(action: Any) -> bool:
-    return any(keyword in str(action or "") for keyword in ("卖", "减", "清", "sell"))
-
-
-def compact_date(value: Any) -> str:
-    return re.sub(r"\D", "", str(value or ""))[:8]
-
-
-def trade_is_today(panel: dict[str, Any], trade: dict[str, Any]) -> bool:
-    today = now().strftime("%Y%m%d")
-    trade_date = compact_date(trade.get("date"))
-    if trade_date:
-        return trade_date == today
-    panel_date = compact_date(panel.get("dateKey"))
-    if panel_date:
-        return panel_date == today
-    return False
-
-
-def same_day_sold(panel: dict[str, Any], code: str) -> tuple[bool, int, float]:
-    target = normalize_code(code)
-    shares = 0
-    amount = 0.0
-    for trade in panel.get("trades", []):
-        if not trade_is_today(panel, trade):
+def approved_price_triggers(state: dict[str, Any], view: dict[str, Any]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    buy_allowed, buy_reason = state_allows_buy(state)
+    for decision in view.get("decisions", []):
+        if not decision.get("approved") or not decision.get("active") or not decision.get("code"):
             continue
-        if normalize_code(trade.get("code")) != target:
+        action = str(decision.get("action") or "")
+        triggers = decision.get("triggers") or {}
+        prices = triggers.get("price_triggers") if isinstance(triggers, dict) else None
+        if not isinstance(prices, list):
             continue
-        if not is_sell_action(trade.get("action")):
-            continue
-        quantity = int(numeric(trade.get("quantity")))
-        if quantity <= 0:
-            continue
-        shares += quantity
-        amount += numeric(trade.get("amount"), numeric(trade.get("price")) * quantity)
-    return shares > 0, shares, amount
+        for item in prices:
+            level = str(item.get("level") or ("buy" if action in {"买入", "试仓"} else "sell" if action in {"减仓", "止盈", "止损"} else "watch"))
+            if level == "buy" and not buy_allowed:
+                continue
+            result.append({
+                **item,
+                "level": level,
+                "code": normalize_code(decision["code"]),
+                "name": decision.get("name") or decision["code"],
+                "action": item.get("action") or action,
+                "decision_id": decision.get("decision_id"),
+                "gate_reason": buy_reason if level == "buy" else "approved risk-management trigger",
+                "confirmation": item.get("confirmation", "intraday"),
+                "quantity": item.get("quantity") or decision.get("quantity"),
+                "valid_until": item.get("valid_until") or "",
+            })
+    return result
 
 
-def candidate_gate_allows_buy(panel: dict[str, Any], item: dict[str, Any], gate: dict[str, Any]) -> tuple[bool, str]:
-    code = normalize_code(item.get("code"))
-    sold_today, shares, _amount = same_day_sold(panel, code)
-    if item.get("blockIfSoldToday", True) and sold_today:
-        return False, f"今日已卖出/减仓{shares}股，进入冷却期，云端不触发买回。"
-    if item.get("requireMarketGate", True) and not gate.get("can_buy"):
-        return False, f"{gate.get('title')}，市场闸门未开。"
-    if item.get("requireThreeConfirmations", True) and not item.get("confirmationsApproved", False):
-        return False, "缺少市场、赛道、个股量价三确认，候选价位触达也不发买入邮件。"
-    if str(item.get("enabled", "true")).lower() == "false":
-        return False, "候选规则未启用。"
-    return True, "市场、赛道、个股三确认均通过。"
-
-
-def load_rules() -> dict[str, Any]:
-    path = Path(env("MONITOR_RULES_PATH", str(RULES_PATH))).expanduser()
-    return load_json(path, {"positions": {}, "candidates": []})
-
-
-def build_position_rule(position: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
-    code = normalize_code(position.get("code"))
-    rule = dict(overrides.get(code, {}))
-    stop_nums = extract_numbers(position.get("stop", ""))
-    trigger_nums = extract_numbers(position.get("trigger", ""))
-    if "stopBelow" not in rule and stop_nums:
-        rule["stopBelow"] = max(stop_nums)
-    if "watchAbove" not in rule and trigger_nums:
-        rule["watchAbove"] = max(trigger_nums)
-    rule.setdefault("stopAction", first_clause(position.get("stop", "")) or "触发持仓风控线")
-    rule.setdefault("watchAction", first_clause(position.get("trigger", "")) or "触发持仓观察线")
-    return rule
-
-
-def evaluate_positions(panel: dict[str, Any], quotes: dict[str, dict[str, Any]], rules: dict[str, Any]) -> list[Alert]:
+def evaluate_approved_triggers(state: dict[str, Any], view: dict[str, Any], quotes: dict[str, dict[str, Any]]) -> list[Alert]:
     alerts: list[Alert] = []
-    overrides = rules.get("positions", {})
-    for position in panel.get("positions", []):
-        code = normalize_code(position.get("code"))
-        if not code or numeric(position.get("quantity")) <= 0:
+    for trigger in approved_price_triggers(state, view):
+        quote = quotes.get(trigger["code"]) or {}
+        if not quote_is_current_session(quote):
             continue
-        quote = quotes.get(code) or {}
-        price = numeric(quote.get("price"), numeric(position.get("currentPrice")))
-        if price <= 0:
+        current = numeric(quote.get("price"))
+        threshold = numeric(trigger.get("price"))
+        operator = trigger.get("operator")
+        hit = current > 0 and threshold > 0 and ((operator == ">=" and current >= threshold) or (operator == "<=" and current <= threshold))
+        confirmation_ok, confirmation_reason = confirmation_allows(trigger, quote)
+        if not hit or not confirmation_ok:
             continue
-        rule = build_position_rule(position, overrides)
-        stop_below = numeric(rule.get("stopBelow"))
-        take_profit_above = numeric(rule.get("takeProfitAbove"))
-        watch_above = numeric(rule.get("watchAbove"))
-        name = position.get("name") or quote.get("name") or code
-        if stop_below and price <= stop_below:
-            alerts.append(Alert(
-                level="sell",
-                code=code,
-                name=name,
-                price=price,
-                rule_price=stop_below,
-                action=rule.get("stopAction", "触发风控线"),
-                reason=f"现价{price:.2f} <= 风控线{stop_below:.2f}",
-            ))
-            continue
-        if take_profit_above and price >= take_profit_above:
-            alerts.append(Alert(
-                level="sell",
-                code=code,
-                name=name,
-                price=price,
-                rule_price=take_profit_above,
-                action=rule.get("takeProfitAction", "触发止盈线"),
-                reason=f"现价{price:.2f} >= 止盈线{take_profit_above:.2f}",
-            ))
-            continue
-        if watch_above and price >= watch_above and str(rule.get("watchNotify", "true")).lower() != "false":
-            alerts.append(Alert(
-                level="watch",
-                code=code,
-                name=name,
-                price=price,
-                rule_price=watch_above,
-                action=rule.get("watchAction", "触发观察线"),
-                reason=f"现价{price:.2f} >= 观察线{watch_above:.2f}",
-            ))
+        alerts.append(Alert(
+            level=trigger["level"], code=trigger["code"], name=trigger["name"], price=current,
+            rule_price=threshold, action=trigger["action"],
+            reason=f"approved decision {trigger['decision_id']}: {current:.2f} {operator} {threshold:.2f}; {confirmation_reason}; {trigger['gate_reason']}",
+            decision_id=trigger["decision_id"], confirmation=trigger["confirmation"],
+            quantity=int(numeric(trigger.get("quantity"))) or None, valid_until=trigger.get("valid_until", ""),
+        ))
     return alerts
 
 
-def evaluate_candidates(panel: dict[str, Any], quotes: dict[str, dict[str, Any]], rules: dict[str, Any], gate: dict[str, Any]) -> list[Alert]:
-    keyed_alerts: list[tuple[int, Alert]] = []
-    for item in rules.get("candidates", []):
-        code = normalize_code(item.get("code"))
-        quote = quotes.get(code) or {}
-        price = numeric(quote.get("price"))
-        if not code or price <= 0:
-            continue
-        name = item.get("name") or quote.get("name") or code
-        allowed, gate_reason = candidate_gate_allows_buy(panel, item, gate)
-        if not allowed:
-            if item.get("watchNotify", False):
-                keyed_alerts.append((int(numeric(item.get("priority"), 999)), Alert(
-                    level="watch",
-                    code=code,
-                    name=name,
-                    price=price,
-                    rule_price=None,
-                    action=item.get("watchAction", "候选股仅观察，不触发买入"),
-                    reason=gate_reason,
-                )))
-            continue
-        buy_above = numeric(item.get("buyAbove"))
-        buy_below = numeric(item.get("buyBelow"))
-        priority = int(numeric(item.get("priority"), 999))
-        if buy_above and price >= buy_above:
-            keyed_alerts.append((priority, Alert(
-                level="buy",
-                code=code,
-                name=name,
-                price=price,
-                rule_price=buy_above,
-                action=item.get("action", "候选股触发买入观察"),
-                reason=f"现价{price:.2f} >= 触发价{buy_above:.2f}；{gate.get('title')}；{gate_reason}",
-            )))
-        elif buy_below and price <= buy_below:
-            keyed_alerts.append((priority, Alert(
-                level="buy",
-                code=code,
-                name=name,
-                price=price,
-                rule_price=buy_below,
-                action=item.get("action", "候选股回踩触发观察"),
-                reason=f"现价{price:.2f} <= 回踩价{buy_below:.2f}；{gate.get('title')}；{gate_reason}",
-            )))
-    keyed_alerts.sort(key=lambda item: item[0])
-    max_alerts = int(numeric(rules.get("maxCandidateAlerts"), 0))
-    alerts = [alert for _, alert in keyed_alerts]
-    return alerts[:max_alerts] if max_alerts > 0 else alerts
-
-
-def should_send(alerts: list[Alert], state_path: Path, quiet_minutes: int, force: bool) -> bool:
-    if force:
-        return bool(alerts)
-    if not alerts:
-        return False
-    state = load_json(state_path, {})
-    signature = "|".join(sorted(alert.signature() for alert in alerts))
-    last_signature = state.get("last_signature")
-    last_sent = state.get("last_sent_at")
-    if signature != last_signature or not last_sent:
-        return True
-    try:
-        last_dt = datetime.fromisoformat(last_sent)
-    except ValueError:
-        return True
-    return now() - last_dt > timedelta(minutes=quiet_minutes)
-
-
-def mark_sent(alerts: list[Alert], state_path: Path) -> None:
-    signature = "|".join(sorted(alert.signature() for alert in alerts))
-    save_json(state_path, {"last_signature": signature, "last_sent_at": now().isoformat()})
-
-
-def alert_direction(alert: Alert) -> str:
-    return {
-        "sell": "卖出/减仓",
-        "buy": "买入/试仓",
-        "watch": "观察",
-    }.get(alert.level, alert.level)
-
-
-def alert_condition(alert: Alert) -> str:
-    if alert.rule_price is None:
-        return "触发线未设置"
-    operator = "<=" if alert.level == "sell" else ">="
-    if "回踩" in alert.action or "<= 回踩价" in alert.reason:
-        operator = "<="
-    return f"现价 {alert.price:.2f} {operator} 条件价 {alert.rule_price:.2f}"
-
-
-def alert_reference_price(alert: Alert) -> str:
-    if alert.level == "sell":
-        return f"卖出/减仓参考价：{alert.price:.2f} 附近；风控线：{alert.rule_price:.2f}" if alert.rule_price else f"卖出/减仓参考价：{alert.price:.2f} 附近"
-    if alert.level == "buy":
-        return f"买入/试仓参考价：{alert.price:.2f} 附近；触发线：{alert.rule_price:.2f}" if alert.rule_price else f"买入/试仓参考价：{alert.price:.2f} 附近"
-    return f"观察参考价：{alert.price:.2f} 附近；观察线：{alert.rule_price:.2f}" if alert.rule_price else f"观察参考价：{alert.price:.2f} 附近"
-
-
-def alert_distance(alert: Alert) -> str:
-    if not alert.rule_price:
-        return ""
-    diff = alert.price - alert.rule_price
-    pct = diff / alert.rule_price * 100
-    return f"距条件价 {diff:+.2f} / {pct:+.2f}%"
-
-
-def build_message(panel: dict[str, Any], gate: dict[str, Any], alerts: list[Alert]) -> tuple[str, str, str]:
-    account = panel.get("account", {})
-    title = f"A股触发提醒 {now().strftime('%H:%M')}"
-    plain = [
-        f"{title}",
-        f"市场闸门：{gate.get('title')}｜{gate.get('metrics')}",
-        f"账户：总资产{account.get('brokerReportedAssets', panel.get('goal', {}).get('currentAssets', '--'))}，仓位{account.get('brokerReportedPositionRatio', '--')}%",
-        "",
-    ]
-    markdown = [
-        f"### {title}",
-        f"- **市场闸门**：{gate.get('title')}｜{gate.get('metrics')}",
-        f"- **账户**：总资产{account.get('brokerReportedAssets', panel.get('goal', {}).get('currentAssets', '--'))}，仓位{account.get('brokerReportedPositionRatio', '--')}%",
-        "",
-    ]
+def build_message(panel: dict[str, Any], gate: dict[str, Any], alerts: list[Alert]) -> tuple[str, str, str, str]:
+    title = f"A股已批准触发提醒 {now().strftime('%H:%M')}"
+    plain = [title, f"状态：{gate.get('title', '--')}｜{gate.get('metrics', '')}", ""]
+    markdown = [f"### {title}", f"- **状态**：{gate.get('title', '--')}｜{gate.get('metrics', '')}", ""]
     for index, alert in enumerate(alerts, 1):
-        distance = alert_distance(alert)
+        quantity = f"{alert.quantity}股" if alert.quantity else "按最新确认持仓"
+        validity = alert.valid_until or "本交易日有效"
         plain.extend([
-            f"{index}. {alert.name} {alert.code}",
-            f"   类型：{alert_direction(alert)}",
-            f"   当前价：{alert.price:.2f}",
-            f"   触发条件：{alert_condition(alert)}" + (f"（{distance}）" if distance else ""),
-            f"   执行参考：{alert_reference_price(alert)}",
-            f"   具体动作：{alert.action}",
-            f"   触发依据：{alert.reason}",
+            f"{index}. 【{alert.action}】{alert.name} {alert.code}",
+            f"   数量：{quantity}",
+            f"   现价/触发：{alert.price:.2f} / {alert.rule_price:.2f}",
+            f"   确认：{alert.confirmation}｜有效期：{validity}",
+            f"   决策编号：{alert.decision_id}",
+            f"   依据：{alert.reason}",
             "",
         ])
         markdown.extend([
-            f"{index}. **{alert.name} {alert.code}**",
-            f"   - 类型：**{alert_direction(alert)}**",
-            f"   - 当前价：`{alert.price:.2f}`",
-            f"   - 触发条件：{alert_condition(alert)}" + (f"（{distance}）" if distance else ""),
-            f"   - 执行参考：{alert_reference_price(alert)}",
-            f"   - 具体动作：{alert.action}",
-            f"   - 触发依据：{alert.reason}",
+            f"{index}. **【{alert.action}】{alert.name} {alert.code}**",
+            f"   - 数量：**{quantity}**",
+            f"   - 现价/触发：`{alert.price:.2f}` / `{alert.rule_price:.2f}`",
+            f"   - 确认：{alert.confirmation}｜有效期：{validity}",
+            f"   - 决策编号：`{alert.decision_id}`",
+            f"   - 依据：{alert.reason}",
             "",
         ])
-    plain.append("")
-    plain.append("仅为公开行情触发提醒，不自动下单。真实持仓以券商账户为准。")
-    markdown.append("")
-    markdown.append("> 仅为公开行情触发提醒，不自动下单。真实持仓以券商账户为准。")
-    sms = "；".join(f"{a.name}{a.price:.2f}/{alert_direction(a)}:{a.action}" for a in alerts[:3])
-    return title, "\n".join(plain), "\n".join(markdown)[:3900], sms[:180]
+    plain.append("仅提醒已批准价格触发，不自动下单。")
+    markdown.append("> 仅提醒已批准价格触发，不自动下单。")
+    sms = "；".join(f"{item.name}{item.price:.2f}:{item.action}" for item in alerts[:3])
+    return title, "\n".join(plain), "\n".join(markdown), sms[:180]
+
+
+def build_decision_summary(state: dict[str, Any], view: dict[str, Any]) -> tuple[str, str, str, str]:
+    """Format the latest state-engine output; this function never creates a trade decision."""
+    account = state.get("account", {})
+    risk = state.get("risk", {})
+    decisions = [item for item in view.get("decisions", []) if item.get("approved") and item.get("active")]
+    account_decision = next((item for item in decisions if not item.get("code")), None)
+    holding_decisions = [item for item in decisions if item.get("code")]
+    title = f"A股定时全面扫描 {now().strftime('%H:%M')}"
+    gate = view.get("market_gate", "--")
+    gate_score = account_decision.get("market_gate_score") if account_decision else None
+    gate_text = f"{gate}（{gate_score}/10）" if gate_score is not None else gate
+    cooldown = risk.get("cooldown_sessions_remaining")
+    cooldown_text = f"，冷却剩余{cooldown}个完整交易日" if cooldown is not None else ""
+    conclusion = (account_decision or {}).get("rationale") or view.get("summary") or "沿用最新有效决策"
+    vetoes = risk.get("new_buy_vetoes") or []
+    veto_text = "；".join(str(item) for item in vetoes) if vetoes else "无"
+    change_labels = {
+        "account_risk": "账户风控变化",
+        "market_gate": "市场闸门变化",
+        "sector_lifecycle": "赛道生命周期变化",
+        "thesis": "持仓逻辑变化",
+        "formal_trigger": "正式触发价命中",
+        "material_announcement": "重大公告变化",
+    }
+    changes: list[str] = []
+    for item in decisions:
+        for value in item.get("material_change") or []:
+            label = change_labels.get(str(value), str(value))
+            if label not in changes:
+                changes.append(label)
+    change_text = "、".join(changes) if changes else "无实质变化，维持原计划"
+
+    plain = [
+        title,
+        f"数据时点：{view.get('data_as_of') or state.get('data_as_of') or '--'}",
+        f"直接结论：{conclusion}",
+        f"市场闸门：{gate_text}",
+        f"账户：总资产{numeric(account.get('total_assets')):,.2f}元，仓位{numeric(account.get('exposure_pct')):.2f}%",
+        f"风控：{risk.get('mode', 'unknown')}{cooldown_text}；新买入={'允许' if risk.get('new_buys_allowed') else '禁止'}",
+        f"买入否决：{veto_text}",
+        "持仓计划：",
+    ]
+    markdown = [
+        f"### {title}",
+        f"- **数据时点**：{view.get('data_as_of') or state.get('data_as_of') or '--'}",
+        f"- **直接结论**：{conclusion}",
+        f"- **市场闸门**：{gate_text}",
+        f"- **账户**：总资产 `{numeric(account.get('total_assets')):,.2f}` 元，仓位 `{numeric(account.get('exposure_pct')):.2f}%`",
+        f"- **风控**：`{risk.get('mode', 'unknown')}`{cooldown_text}；新买入 **{'允许' if risk.get('new_buys_allowed') else '禁止'}**",
+        f"- **买入否决**：{veto_text}",
+        "",
+        "#### 持仓计划",
+    ]
+    if holding_decisions:
+        for item in holding_decisions:
+            line = f"{item.get('name') or item.get('code')}：{item.get('action') or '观察'}；{item.get('rationale') or '沿用原计划'}（{item.get('decision_id') or '--'}）"
+            plain.append(f"- {line}")
+            markdown.append(f"- **{item.get('name') or item.get('code')}**：{item.get('action') or '观察'}；{item.get('rationale') or '沿用原计划'}（`{item.get('decision_id') or '--'}`）")
+    else:
+        plain.append("- 无已批准持仓决策")
+        markdown.append("- 无已批准持仓决策")
+    plain.extend(["", f"相比上次：{change_text}。", "仅作提醒，不自动下单；实际成交必须人工确认。"])
+    markdown.extend(["", f"> **相比上次**：{change_text}。", "> 仅作提醒，不自动下单；实际成交必须人工确认。"])
+    return title, "\n".join(plain), "\n".join(markdown), conclusion[:180]
 
 
 def post_json(url: str, payload: dict[str, Any], timeout: int = 10) -> str:
-    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    request = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+    request = urllib.request.Request(url, data=json.dumps(payload, ensure_ascii=False).encode(), headers={"Content-Type": "application/json"}, method="POST")
     with urllib.request.urlopen(request, timeout=timeout) as response:
-        return response.read().decode("utf-8", errors="ignore")
-
-
-def post_form(url: str, payload: dict[str, Any], timeout: int = 10) -> str:
-    data = urllib.parse.urlencode(payload).encode("utf-8")
-    request = urllib.request.Request(
-        url,
-        data=data,
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
-    )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return response.read().decode("utf-8", errors="ignore")
-
-
-def notify_wechat(title: str, plain: str, markdown: str) -> bool:
-    sent = False
-    webhook = env("WECHAT_WORK_WEBHOOK_URL")
-    if webhook:
-        post_json(webhook, {"msgtype": "markdown", "markdown": {"content": markdown}})
-        sent = True
-    token = env("PUSHPLUS_TOKEN")
-    if token:
-        payload = {"token": token, "title": title, "content": markdown, "template": "markdown"}
-        topic = env("PUSHPLUS_TOPIC")
-        if topic:
-            payload["topic"] = topic
-        post_json("https://www.pushplus.plus/send", payload)
-        sent = True
-    server_chan = env("SERVERCHAN_SENDKEY")
-    if server_chan:
-        post_form(f"https://sctapi.ftqq.com/{server_chan}.send", {"title": title, "desp": markdown})
-        sent = True
-    return sent
+        return response.read().decode(errors="replace")
 
 
 def notify_email(title: str, plain: str) -> bool:
     host = env("SMTP_HOST")
-    to_addr = env("MAIL_TO")
-    if not host or not to_addr:
-        return False
-    port = int(env("SMTP_PORT", "465"))
-    user = env("SMTP_USERNAME")
+    username = env("SMTP_USERNAME")
     password = env("SMTP_PASSWORD")
-    from_addr = env("MAIL_FROM", user)
+    recipient = env("MAIL_TO")
+    if not all((host, username, password, recipient)):
+        return False
     message = MIMEText(plain, "plain", "utf-8")
     message["Subject"] = title
-    message["From"] = from_addr
-    message["To"] = to_addr
-    message["Date"] = email.utils.formatdate(localtime=True)
-    if port == 465:
-        with smtplib.SMTP_SSL(host, port, context=ssl.create_default_context(), timeout=12) as smtp:
-            if user:
-                smtp.login(user, password)
-            smtp.sendmail(from_addr, [addr.strip() for addr in to_addr.split(",")], message.as_string())
-    else:
-        with smtplib.SMTP(host, port, timeout=12) as smtp:
-            smtp.starttls(context=ssl.create_default_context())
-            if user:
-                smtp.login(user, password)
-            smtp.sendmail(from_addr, [addr.strip() for addr in to_addr.split(",")], message.as_string())
-    return True
-
-
-def percent_encode(value: str) -> str:
-    return urllib.parse.quote(value, safe="").replace("+", "%20").replace("*", "%2A").replace("%7E", "~")
-
-
-def aliyun_signature(params: dict[str, str], secret: str) -> str:
-    query = "&".join(f"{percent_encode(k)}={percent_encode(params[k])}" for k in sorted(params))
-    string_to_sign = f"GET&%2F&{percent_encode(query)}"
-    digest = hmac.new((secret + "&").encode("utf-8"), string_to_sign.encode("utf-8"), hashlib.sha1).digest()
-    return base64.b64encode(digest).decode("ascii")
-
-
-def notify_sms(title: str, sms_text: str) -> bool:
-    webhook = env("SMS_WEBHOOK_URL")
-    if webhook:
-        post_json(webhook, {"title": title, "message": sms_text})
-        return True
-    if env("SMS_PROVIDER").lower() != "aliyun":
-        return False
-    access_key = env("ALIYUN_ACCESS_KEY_ID")
-    access_secret = env("ALIYUN_ACCESS_KEY_SECRET")
-    phone = env("SMS_TO")
-    sign_name = env("ALIYUN_SMS_SIGN_NAME")
-    template_code = env("ALIYUN_SMS_TEMPLATE_CODE")
-    if not all([access_key, access_secret, phone, sign_name, template_code]):
-        return False
-    template_param = env("ALIYUN_SMS_TEMPLATE_PARAM_JSON", '{"message":"{{message}}"}')
-    template_param = template_param.replace("{{message}}", sms_text.replace('"', "'"))
-    params = {
-        "AccessKeyId": access_key,
-        "Action": "SendSms",
-        "Format": "JSON",
-        "PhoneNumbers": phone,
-        "RegionId": "cn-hangzhou",
-        "SignatureMethod": "HMAC-SHA1",
-        "SignatureNonce": hashlib.md5(f"{time.time()}".encode()).hexdigest(),
-        "SignatureVersion": "1.0",
-        "SignName": sign_name,
-        "TemplateCode": template_code,
-        "TemplateParam": template_param,
-        "Timestamp": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "Version": "2017-05-25",
-    }
-    params["Signature"] = aliyun_signature(params, access_secret)
-    url = "https://dysmsapi.aliyuncs.com/?" + urllib.parse.urlencode(params)
-    http_get(url, timeout=12)
+    message["From"] = env("MAIL_FROM", username)
+    message["To"] = recipient
+    port = int(env("SMTP_PORT", "465"))
+    with smtplib.SMTP_SSL(host, port, context=ssl.create_default_context(), timeout=15) as client:
+        client.login(username, password)
+        client.sendmail(message["From"], [item.strip() for item in recipient.split(",")], message.as_string())
     return True
 
 
 def notify_all(title: str, plain: str, markdown: str, sms: str, dry_run: bool) -> list[str]:
-    channels = []
     if dry_run:
-        print(markdown)
+        print(plain)
         return ["dry-run"]
-    for channel, sender in (
-        ("wechat", lambda: notify_wechat(title, plain, markdown)),
-        ("email", lambda: notify_email(title, plain)),
-        ("sms", lambda: notify_sms(title, sms)),
-    ):
+    sent: list[str] = []
+    failures: list[str] = []
+    webhook = env("WECHAT_WORK_WEBHOOK_URL")
+    if webhook:
         try:
-            if sender():
-                channels.append(channel)
+            post_json(webhook, {"msgtype": "markdown", "markdown": {"content": markdown[:3900]}})
+            sent.append("wechat-work")
         except Exception as exc:
-            print(f"[WARN] {channel}通知失败：{exc}")
-    return channels
+            failures.append(f"wechat-work:{exc}")
+    token = env("PUSHPLUS_TOKEN")
+    if token:
+        try:
+            payload = {"token": token, "title": title, "content": markdown, "template": "markdown", "channel": "wechat"}
+            if env("PUSHPLUS_TOPIC"):
+                payload["topic"] = env("PUSHPLUS_TOPIC")
+            response = json.loads(post_json("https://www.pushplus.plus/send", payload))
+            if int(response.get("code", 0)) != 200:
+                raise RuntimeError(f"PushPlus返回{response.get('code')}: {response.get('msg') or response.get('data')}")
+            sent.append("pushplus")
+        except Exception as exc:
+            failures.append(f"pushplus:{exc}")
+    try:
+        if notify_email(title, plain):
+            sent.append("email")
+    except Exception as exc:
+        failures.append(f"email:{exc}")
+    if failures:
+        print("notification failures: " + " | ".join(failures), file=sys.stderr)
+    return sent
+
+
+def should_send(alerts: list[Alert], force: bool) -> bool:
+    if not alerts:
+        return False
+    if force:
+        return True
+    path = Path(env("ALERT_STATE_FILE", str(ALERT_STATE)))
+    state = load_json(path, {})
+    signature = "|".join(sorted(item.signature() for item in alerts))
+    if signature != state.get("last_signature"):
+        return True
+    try:
+        last = datetime.fromisoformat(state["last_sent_at"])
+    except (KeyError, ValueError):
+        return True
+    return now() - last >= timedelta(minutes=int(env("QUIET_REPEAT_MINUTES", "30")))
+
+
+def mark_sent(alerts: list[Alert]) -> None:
+    path = Path(env("ALERT_STATE_FILE", str(ALERT_STATE)))
+    save_json(path, {"last_signature": "|".join(sorted(item.signature() for item in alerts)), "last_sent_at": now().isoformat()})
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="A-share cloud monitor")
-    parser.add_argument("--force", action="store_true", help="ignore duplicate suppression")
-    parser.add_argument("--dry-run", action="store_true", help="print message without sending")
-    parser.add_argument("--ignore-trading-time", action="store_true", help="run outside A-share trading hours")
+    load_runtime_env()
+    parser = argparse.ArgumentParser(description="Approved A-share price-trigger monitor")
+    parser.add_argument("--force", action="store_true")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--ignore-trading-time", action="store_true")
+    parser.add_argument("--test-notification", action="store_true", help="send one PushPlus/backup channel test")
+    parser.add_argument("--send-decision-summary", action="store_true", help="send the latest state-engine decision summary")
     args = parser.parse_args()
-
-    trading_now = is_trading_time()
-    checkpoint_now = is_scheduled_checkpoint()
-    if env("TRADE_HOURS_ONLY", "true").lower() != "false" and not args.ignore_trading_time and not trading_now and not checkpoint_now:
-        print(f"[{now_label()}] 非A股交易时段且非08:00/14:00检查点，跳过。")
+    if args.test_notification:
+        title = "操盘策略0710微信提醒测试"
+        plain = "微信提醒通道测试成功。后续仅推送已批准的买卖信号，不自动下单。"
+        markdown = "### 操盘策略0710微信提醒测试\n\n通道已连接。后续仅推送**已批准**的买卖信号，不自动下单。"
+        channels = notify_all(title, plain, markdown, plain, False)
+        print(f"channels: {','.join(channels) if channels else 'none configured'}")
+        return 0 if "pushplus" in channels else 1
+    state = load_json(Path(env("TRADING_STATE_PATH", str(TRADING_STATE))), {})
+    view = load_json(Path(env("DECISION_LATEST_PATH", str(DECISION_LATEST))), {})
+    if args.send_decision_summary:
+        title, plain, markdown, sms = build_decision_summary(state, view)
+        channels = notify_all(title, plain, markdown, sms, args.dry_run)
+        print(f"channels: {','.join(channels) if channels else 'none configured'}")
+        return 0 if channels else 1
+    if not args.ignore_trading_time and env("TRADE_HOURS_ONLY", "true").lower() == "true" and not is_trading_time():
+        print("outside trading hours")
         return 0
-
-    panel_path = Path(env("PANEL_SYNC_PATH", str(PANEL_SYNC))).expanduser()
-    state_path = Path(env("ALERT_STATE_FILE", str(STATE_PATH))).expanduser()
-    quiet_minutes = int(env("QUIET_REPEAT_MINUTES", "30"))
-
-    panel = load_json(panel_path, {})
-    rules = load_rules()
-    position_codes = [normalize_code(item.get("code")) for item in panel.get("positions", [])]
-    candidate_codes = [normalize_code(item.get("code")) for item in rules.get("candidates", [])]
-    quotes = fetch_tencent_quotes(position_codes + candidate_codes)
-    gate = market_gate(quotes)
-    alerts = evaluate_positions(panel, quotes, rules)
-    alerts.extend(evaluate_candidates(panel, quotes, rules, gate))
-    min_level = env("ALERT_MIN_LEVEL", "actionable").lower()
-    if min_level == "actionable":
-        alerts = [item for item in alerts if item.level in {"sell", "buy"}]
-    elif min_level == "sell":
-        alerts = [item for item in alerts if item.level == "sell"]
-
-    print(f"[{now_label()}] {gate['title']} {gate['metrics']} alerts={len(alerts)}")
-    for alert in alerts:
-        print(f"- {alert.level} {alert.name} {alert.code} {alert.price:.2f}: {alert.action}")
-
-    if not can_send_production_alerts() and not args.force and not args.dry_run:
-        print(f"[{now_label()}] 非连续竞价交易时段，本次仅刷新/记录，不发送生产买卖邮件。")
+    triggers = approved_price_triggers(state, view)
+    if not triggers:
+        print("no approved actionable price triggers")
         return 0
-
-    if not should_send(alerts, state_path, quiet_minutes, args.force):
+    quotes = fetch_tencent_quotes([item["code"] for item in triggers])
+    alerts = evaluate_approved_triggers(state, view, quotes)
+    if not should_send(alerts, args.force):
+        print("no new triggered alerts")
         return 0
-
-    title, plain, markdown, sms = build_message(panel, gate, alerts)
+    gate = {"title": f"risk={state.get('risk', {}).get('mode', 'unknown')}", "metrics": f"decision={view.get('latest_decision_id', '--')}"}
+    title, plain, markdown, sms = build_message(state, gate, alerts)
     channels = notify_all(title, plain, markdown, sms, args.dry_run)
-    if not channels:
-        print("[WARN] 没有配置任何通知通道，未发送。")
-        return 2
-    mark_sent(alerts, state_path)
-    print(f"[OK] 已发送: {', '.join(channels)}")
+    if channels and not args.dry_run:
+        mark_sent(alerts)
+    print(f"channels: {','.join(channels) if channels else 'none configured'}")
     return 0
 
 

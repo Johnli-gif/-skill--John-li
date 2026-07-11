@@ -1,3 +1,2 @@
-# 备用 cron 方案：每个交易日北京 08:00 和 14:00 各执行一次。
-# 08:00 默认只做盘前刷新/记录，脚本不会用昨收价发送生产买卖邮件。
-0 8,14 * * 1-5 cd /opt/ashare-monitor && set -a && . /etc/ashare-monitor.env && set +a && /usr/bin/python3 scripts/cloud_monitor.py >> /var/log/ashare-monitor.log 2>&1
+# 备用 cron：交易时段候选分钟每5分钟运行，脚本会过滤集合竞价、午休和收盘后。
+*/5 9-11,13-15 * * 1-5 cd /opt/ashare-monitor && set -a && . /etc/ashare-monitor.env && set +a && /usr/bin/python3 scripts/cloud_monitor.py >> /var/log/ashare-monitor.log 2>&1

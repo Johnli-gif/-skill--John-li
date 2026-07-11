@@ -27,19 +27,15 @@ on:
         options:
           - "false"
           - "true"
-      test_mail:
-        description: "Send one email test notification"
-        required: false
-        default: "false"
-        type: choice
-        options:
-          - "false"
-          - "true"
   schedule:
-    # GitHub Actions cron uses UTC. These schedules map to Beijing time:
-    # 08:00 and 14:00 on trading weekdays. GitHub may delay scheduled runs.
-    - cron: "0 0 * * 1-5"
-    - cron: "0 6 * * 1-5"
+    # Five-minute deterministic price monitor. It does not call an LLM.
+    # UTC ranges map to Beijing 09:25-11:35 and 12:55-15:05.
+    - cron: "25-55/5 1 * * 1-5"
+    - cron: "*/5 2 * * 1-5"
+    - cron: "0-35/5 3 * * 1-5"
+    - cron: "55 4 * * 1-5"
+    - cron: "*/5 5-6 * * 1-5"
+    - cron: "0-5/5 7 * * 1-5"
 
 permissions:
   contents: read
@@ -55,34 +51,28 @@ jobs:
 
     env:
       TZ: Asia/Shanghai
-      PANEL_SYNC_PATH: data/panel-sync.json
-      MONITOR_RULES_PATH: config/cloud-monitor-rules.json
+      TRADING_STATE_PATH: data/trading-state.json
+      DECISION_LATEST_PATH: data/decision-latest.json
       ALERT_STATE_FILE: data/cloud-monitor/state.json
       TRADE_HOURS_ONLY: "true"
-      ALERT_MIN_LEVEL: ${{ secrets.ALERT_MIN_LEVEL || 'actionable' }}
       QUIET_REPEAT_MINUTES: ${{ secrets.QUIET_REPEAT_MINUTES || '30' }}
       WECHAT_WORK_WEBHOOK_URL: ${{ secrets.WECHAT_WORK_WEBHOOK_URL }}
       PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
       PUSHPLUS_TOPIC: ${{ secrets.PUSHPLUS_TOPIC }}
-      SERVERCHAN_SENDKEY: ${{ secrets.SERVERCHAN_SENDKEY }}
-      SMTP_HOST: ${{ secrets.SMTP_HOST }}
-      SMTP_PORT: ${{ secrets.SMTP_PORT }}
-      SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
-      SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
-      MAIL_FROM: ${{ secrets.MAIL_FROM }}
-      MAIL_TO: ${{ secrets.MAIL_TO }}
-      SMS_WEBHOOK_URL: ${{ secrets.SMS_WEBHOOK_URL }}
-      SMS_PROVIDER: ${{ secrets.SMS_PROVIDER }}
-      SMS_TO: ${{ secrets.SMS_TO }}
-      ALIYUN_ACCESS_KEY_ID: ${{ secrets.ALIYUN_ACCESS_KEY_ID }}
-      ALIYUN_ACCESS_KEY_SECRET: ${{ secrets.ALIYUN_ACCESS_KEY_SECRET }}
-      ALIYUN_SMS_SIGN_NAME: ${{ secrets.ALIYUN_SMS_SIGN_NAME }}
-      ALIYUN_SMS_TEMPLATE_CODE: ${{ secrets.ALIYUN_SMS_TEMPLATE_CODE }}
-      ALIYUN_SMS_TEMPLATE_PARAM_JSON: ${{ secrets.ALIYUN_SMS_TEMPLATE_PARAM_JSON }}
+      TRADING_STATE_JSON: ${{ secrets.TRADING_STATE_JSON }}
+      DECISION_LATEST_JSON: ${{ secrets.DECISION_LATEST_JSON }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Materialize private runtime state
+        run: |
+          test -n "$TRADING_STATE_JSON"
+          test -n "$DECISION_LATEST_JSON"
+          mkdir -p data
+          printf '%s' "$TRADING_STATE_JSON" > data/trading-state.json
+          printf '%s' "$DECISION_LATEST_JSON" > data/decision-latest.json
 
       - name: Restore duplicate-alert state
         uses: actions/cache@v4
@@ -112,7 +102,7 @@ jobs:
           payload = {
               "token": token,
               "title": "A股监控通道测试",
-              "content": "财经热点分析云端监控已连接。后续每个交易日北京08:00和14:00检查行情；08:00只做盘前刷新/记录，14:00若触发交易条件才推送提醒。",
+              "content": "操盘策略0710提醒通道已连接。交易时段每5分钟检查已批准价格信号；不会调用AI，也不会自动下单。",
               "template": "markdown",
           }
           req = urllib.request.Request(
@@ -126,63 +116,13 @@ jobs:
           print(body)
           PY
 
-      - name: Test email channel
-        if: ${{ inputs.test_mail == 'true' }}
-        run: |
-          python - <<'PY'
-          from scripts.cloud_monitor import Alert, build_message, notify_email
-
-          panel = {
-              "account": {
-                  "brokerReportedAssets": 519716.77,
-                  "brokerReportedPositionRatio": 55.9,
-              }
-          }
-          gate = {
-              "title": "模拟：市场可小仓试错",
-              "metrics": "上证+0.30%｜深成+0.80%｜创业板+1.10%｜科创50+0.60%",
-          }
-          alerts = [
-              Alert(
-                  level="sell",
-                  code="300776",
-                  name="帝尔激光",
-                  price=204.80,
-                  rule_price=205.00,
-                  action="模拟触发：帝尔激光新增仓跌破205，先减半；跌破198处理新增仓",
-                  reason="模拟行情：现价204.80 <= 风控线205.00",
-              ),
-              Alert(
-                  level="buy",
-                  code="000021",
-                  name="深科技",
-                  price=62.10,
-                  rule_price=62.00,
-                  action="模拟触发：深科技站上62，存储芯片方向可试仓500股",
-                  reason="模拟行情：现价62.10 >= 触发价62.00；市场可小仓试错",
-              ),
-              Alert(
-                  level="buy",
-                  code="002185",
-                  name="华天科技",
-                  price=22.86,
-                  rule_price=22.80,
-                  action="模拟触发：华天科技站稳22.8，封测板块放量时继续持有或小幅加仓",
-                  reason="模拟行情：现价22.86 >= 触发价22.80；市场可小仓试错",
-              ),
-          ]
-          title, plain, _, _ = build_message(panel, gate, alerts)
-          title = f"模拟{title}"
-          if not notify_email(title, plain):
-              raise SystemExit("email channel is not configured")
-          print("simulated alert email sent")
-          PY
-
       - name: Validate config
         run: |
-          python -m json.tool data/panel-sync.json >/dev/null
+          python -m json.tool data/trading-state.json >/dev/null
+          python -m json.tool data/decision-latest.json >/dev/null
           python -m json.tool config/cloud-monitor-rules.json >/dev/null
           python -m py_compile scripts/cloud_monitor.py
+          python -m unittest discover -s tests -p 'test_cloud_monitor.py' -v
 
       - name: Run monitor
         run: |

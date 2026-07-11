@@ -1,9 +1,10 @@
 [Unit]
-Description=Run A-share cloud monitor at 08:00 and 14:00 on trading weekdays
+Description=Run A-share approved-signal monitor every five minutes
 
 [Timer]
-OnCalendar=Mon..Fri 08:00
-OnCalendar=Mon..Fri 14:00
+OnBootSec=1min
+OnUnitActiveSec=5min
+AccuracySec=15s
 Persistent=true
 Unit=ashare-monitor.service
 
