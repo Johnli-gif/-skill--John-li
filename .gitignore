@@ -5,6 +5,6 @@ data/cloud-monitor/*.json
 data/market/latest/*.json
 *.sqlite-shm
 *.sqlite-wal
-data/trading-ledger.sqlite
+data/trading-ledger*.sqlite
 data/trading-state.json
 data/decision-latest.json
