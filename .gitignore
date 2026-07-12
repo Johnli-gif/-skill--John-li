@@ -8,3 +8,4 @@ data/market/latest/*.json
 data/trading-ledger*.sqlite
 data/trading-state.json
 data/decision-latest.json
+data/analysis-context.json
