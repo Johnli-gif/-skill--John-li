@@ -120,6 +120,11 @@ def calendar_covers(day: date, path: Path = CALENDAR_PATH) -> bool:
     return str(day.year) in (load_exchange_calendar(path).get("years") or {})
 
 
+def calendar_coverage_end(path: Path = CALENDAR_PATH) -> date | None:
+    years = [int(value) for value in (load_exchange_calendar(path).get("years") or {}) if str(value).isdigit()]
+    return date(max(years), 12, 31) if years else None
+
+
 def is_trading_day(day: date, path: Path = CALENDAR_PATH) -> bool:
     calendar = load_exchange_calendar(path)
     year = (calendar.get("years") or {}).get(str(day.year))
@@ -857,10 +862,20 @@ def trading_days_until(target: date, current: date) -> int:
 
 def run_health_check(state: dict[str, Any], view: dict[str, Any]) -> int:
     current = now()
+    coverage_end = calendar_coverage_end()
+    if not calendar_covers(current.date()):
+        delivered = operational_notice(
+            "A股云端监控异常",
+            [f"交易日历未覆盖{current.date().isoformat()}，已停止全部可执行提醒"],
+            repeat_minutes=720,
+        )
+        return 1 if delivered else 2
     if not is_trading_day(current.date()):
         print("health check skipped on exchange holiday")
         return 0
     issues: list[str] = []
+    if coverage_end and 0 <= (coverage_end - current.date()).days <= 30:
+        issues.append(f"交易日历将于{coverage_end.isoformat()}到期，需导入下一年官方休市安排")
     valid, reason = runtime_bundle_is_valid(state, view, current)
     if not valid:
         issues.append(f"状态包不可执行：{reason}")

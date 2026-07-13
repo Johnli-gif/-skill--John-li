@@ -305,6 +305,29 @@ class CloudMonitorTest(unittest.TestCase):
             self.assertEqual(module.run_health_check(state, view), 0)
             notice.assert_not_called()
 
+    def test_health_check_alerts_when_calendar_year_is_missing(self):
+        current = datetime(2027, 1, 4, 11, 45, tzinfo=module.TZ)
+        with patch.object(module, "now", return_value=current), patch.object(module, "operational_notice", return_value=True) as notice:
+            self.assertEqual(module.run_health_check({}, {}), 1)
+            self.assertIn("未覆盖", notice.call_args.args[1][0])
+
+    def test_health_check_warns_before_calendar_coverage_expires(self):
+        current = datetime(2026, 12, 1, 11, 45, tzinfo=module.TZ)
+        state = self.state(positions=[])
+        state["data_as_of"] = "2026-11-30T15:00:00+08:00"
+        view = {
+            "skill_version": "2.3.0",
+            "generated_at": state["generated_at"],
+            "risk_state": "normal",
+            "decisions": [],
+        }
+        with tempfile.TemporaryDirectory() as folder, patch.object(module, "now", return_value=current), patch.dict(os.environ, {
+            "HEARTBEAT_STATE_FILE": str(Path(folder) / "heartbeat.json"),
+        }, clear=False), patch.object(module, "operational_notice", return_value=True) as notice:
+            module.save_json(Path(folder) / "heartbeat.json", {"last_monitor_success_at": datetime(2026, 12, 1, 11, 35, tzinfo=module.TZ).isoformat()})
+            self.assertEqual(module.run_health_check(state, view), 1)
+            self.assertIn("到期", notice.call_args.args[1][0])
+
 
 if __name__ == "__main__":
     unittest.main()
