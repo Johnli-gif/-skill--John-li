@@ -161,6 +161,19 @@ class CloudMonitorTest(unittest.TestCase):
         self.assertFalse(allowed)
         self.assertIn("atomically", reason)
 
+    def test_runtime_bundle_rejects_obsolete_skill_version(self):
+        state = self.state()
+        state["skill_version"] = "2.2.0"
+        view = {
+            "skill_version": "2.2.0",
+            "generated_at": state["generated_at"],
+            "risk_state": "normal",
+            "decisions": [],
+        }
+        allowed, reason = module.runtime_bundle_is_valid(state, view, self.current_time())
+        self.assertFalse(allowed)
+        self.assertIn("obsolete", reason)
+
     def test_close_sell_replaces_same_price_watch_alert(self):
         current = self.current_time(15, 5)
         state = self.state(

@@ -31,6 +31,7 @@ HEARTBEAT_STATE = ROOT / "data" / "cloud-monitor" / "heartbeat.json"
 HEALTH_NOTICE_STATE = ROOT / "data" / "cloud-monitor" / "health-notice.json"
 CALENDAR_PATH = ROOT / "config" / "china-exchange-calendar.json"
 TZ = ZoneInfo("Asia/Shanghai")
+EXPECTED_SKILL_VERSION = "2.3.0"
 ACTIONABLE_DECISION_ACTIONS = {"买入", "试仓", "加仓", "减仓", "卖出", "止损", "止盈", "清仓"}
 
 
@@ -277,6 +278,8 @@ def runtime_bundle_is_valid(
         return False, "trading state and decision bundle were not generated atomically"
     if state.get("skill_version") != view.get("skill_version"):
         return False, "trading state and decision skill versions differ"
+    if state.get("skill_version") != EXPECTED_SKILL_VERSION:
+        return False, f"runtime bundle uses obsolete skill version {state.get('skill_version') or 'missing'}"
     state_mode = str(state.get("risk", {}).get("mode") or "")
     view_mode = str(view.get("risk_state") or "")
     if state_mode and view_mode and state_mode != view_mode:
