@@ -103,9 +103,8 @@ jobs:
           done
 
       - name: Restore duplicate-alert state
-        uses: actions/cache@v6
+        uses: actions/cache/restore@v6
         with:
-          save-always: true
           path: |
             data/cloud-monitor/state.json
             data/cloud-monitor/summary-state.json
@@ -148,3 +147,15 @@ jobs:
             args+=(--health-check)
           fi
           python scripts/cloud_monitor.py "${args[@]}"
+
+      - name: Save duplicate-alert state
+        if: ${{ always() }}
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            data/cloud-monitor/state.json
+            data/cloud-monitor/summary-state.json
+            data/cloud-monitor/notification-receipt.json
+            data/cloud-monitor/heartbeat.json
+            data/cloud-monitor/health-notice.json
+          key: ashare-monitor-state-${{ github.run_id }}
