@@ -35,23 +35,26 @@ on:
         options:
           - "false"
           - "true"
+      health_check:
+        description: "Check the external trigger heartbeat and decision expiry"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
   schedule:
-    # Five-minute deterministic price monitor. It does not call an LLM.
-    # UTC ranges map to Beijing 09:25-11:35 and 12:55-15:05.
-    # Offset by two minutes to reduce GitHub's documented top-of-hour congestion.
-    - cron: "27-57/5 1 * * 1-5"
-    - cron: "2-57/5 2 * * 1-5"
-    - cron: "2-37/5 3 * * 1-5"
-    - cron: "57 4 * * 1-5"
-    - cron: "2-57/5 5-6 * * 1-5"
-    - cron: "2-7/5 7 * * 1-5"
+    # GitHub only checks the external monitor heartbeat. cron-job.org is the
+    # sole five-minute trigger, preventing duplicate 2-3 minute dispatches.
+    - cron: "45 3 * * 1-5"
+    - cron: "15 7 * * 1-5"
 
 permissions:
   contents: read
 
 concurrency:
   group: ashare-monitor
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   monitor:
@@ -65,11 +68,17 @@ jobs:
       ALERT_STATE_FILE: data/cloud-monitor/state.json
       SUMMARY_STATE_FILE: data/cloud-monitor/summary-state.json
       NOTIFICATION_RECEIPT_FILE: data/cloud-monitor/notification-receipt.json
+      HEARTBEAT_STATE_FILE: data/cloud-monitor/heartbeat.json
+      HEALTH_NOTICE_STATE_FILE: data/cloud-monitor/health-notice.json
       TRADE_HOURS_ONLY: "true"
       QUIET_REPEAT_MINUTES: ${{ secrets.QUIET_REPEAT_MINUTES || '30' }}
+      MAX_QUOTE_AGE_MINUTES: "5"
+      MAX_SOURCE_PRICE_DIFF_PCT: "0.20"
+      HEARTBEAT_MAX_AGE_MINUTES: "12"
       WECHAT_WORK_WEBHOOK_URL: ${{ secrets.WECHAT_WORK_WEBHOOK_URL }}
       PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
-      PUSHPLUS_ACCESS_KEY: ${{ secrets.PUSHPLUS_ACCESS_KEY }}
+      PUSHPLUS_CALLBACK_URL: ${{ secrets.PUSHPLUS_CALLBACK_URL }}
+      PUSHPLUS_VERIFY_ATTEMPTS: "12"
       PUSHPLUS_TOPIC: ${{ secrets.PUSHPLUS_TOPIC }}
       TRADING_STATE_JSON: ${{ secrets.TRADING_STATE_JSON }}
       DECISION_LATEST_JSON: ${{ secrets.DECISION_LATEST_JSON }}
@@ -86,13 +95,23 @@ jobs:
           printf '%s' "$TRADING_STATE_JSON" > data/trading-state.json
           printf '%s' "$DECISION_LATEST_JSON" > data/decision-latest.json
 
+      - name: Prepare persistent monitor state
+        run: |
+          mkdir -p data/cloud-monitor
+          for file in state.json summary-state.json notification-receipt.json heartbeat.json health-notice.json; do
+            test -e "data/cloud-monitor/$file" || printf '{}\n' > "data/cloud-monitor/$file"
+          done
+
       - name: Restore duplicate-alert state
         uses: actions/cache@v6
         with:
+          save-always: true
           path: |
             data/cloud-monitor/state.json
             data/cloud-monitor/summary-state.json
             data/cloud-monitor/notification-receipt.json
+            data/cloud-monitor/heartbeat.json
+            data/cloud-monitor/health-notice.json
           key: ashare-monitor-state-${{ github.run_id }}
           restore-keys: |
             ashare-monitor-state-
@@ -102,49 +121,15 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Send PushPlus maintenance notification
-        if: ${{ inputs.test_push == 'true' || inputs.renewal_notice == 'true' }}
-        env:
-          RENEWAL_NOTICE: ${{ inputs.renewal_notice || 'false' }}
-        run: |
-          python - <<'PY'
-          import json
-          import os
-          import urllib.request
-
-          token = os.environ.get("PUSHPLUS_TOKEN", "").strip()
-          if not token:
-              raise SystemExit("PUSHPLUS_TOKEN is not configured")
-
-          renewal_notice = os.environ.get("RENEWAL_NOTICE", "false") == "true"
-          payload = {
-              "token": token,
-              "title": "A股云端监控凭证续期提醒" if renewal_notice else "A股监控通道测试",
-              "content": (
-                  "外部定时触发专用GitHub令牌将于2026-10-11到期。请在到期前打开Codex，发送“更新云端监控凭证”完成轮换；交易策略和持仓数据不会因此自动改变。"
-                  if renewal_notice
-                  else "操盘策略0710提醒通道已连接。交易时段每5分钟检查已批准价格信号；不会调用AI，也不会自动下单。"
-              ),
-              "template": "markdown",
-          }
-          req = urllib.request.Request(
-              "https://www.pushplus.plus/send",
-              data=json.dumps(payload).encode("utf-8"),
-              method="POST",
-              headers={"Content-Type": "application/json"},
-          )
-          with urllib.request.urlopen(req, timeout=20) as resp:
-              body = resp.read().decode("utf-8", "replace")
-          print(body)
-          PY
-
       - name: Validate config
         run: |
           python -m json.tool data/trading-state.json >/dev/null
           python -m json.tool data/decision-latest.json >/dev/null
           python -m json.tool config/cloud-monitor-rules.json >/dev/null
+          python -m json.tool config/china-exchange-calendar.json >/dev/null
           python -m py_compile scripts/cloud_monitor.py
-          python -m unittest discover -s tests -p 'test_cloud_monitor.py' -v
+          python -m py_compile scripts/trading_ledger.py
+          python -m unittest discover -s tests -p 'test_*.py' -v
 
       - name: Run monitor
         run: |
@@ -154,5 +139,12 @@ jobs:
           fi
           if [ "${{ inputs.dry_run || 'false' }}" = "true" ]; then
             args+=(--dry-run --ignore-trading-time)
+          fi
+          if [ "${{ inputs.test_push || 'false' }}" = "true" ]; then
+            args+=(--test-notification)
+          elif [ "${{ inputs.renewal_notice || 'false' }}" = "true" ]; then
+            args+=(--renewal-notice)
+          elif [ "${{ inputs.health_check || 'false' }}" = "true" ] || [ "${{ github.event_name }}" = "schedule" ]; then
+            args+=(--health-check)
           fi
           python scripts/cloud_monitor.py "${args[@]}"

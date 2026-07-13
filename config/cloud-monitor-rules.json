@@ -6,5 +6,8 @@
   "same_day_rebuy_blocked": true,
   "buy_modes": ["normal", "probation"],
   "stale_data_blocks_buy": true,
-  "note": "本文件只保留监控声明。实际提醒规则只来自decision-latest.json中的已批准price_triggers。"
+  "stale_data_blocks_all_actions": true,
+  "quote_confirmation": "tencent_and_sina",
+  "official_close_after": "15:01 Asia/Shanghai",
+  "note": "实际提醒只来自decision-latest.json中的已批准price_triggers；状态过期、版本不一致、双行情源不一致或非交易日时不生成可执行提醒。"
 }
