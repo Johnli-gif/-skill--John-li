@@ -870,8 +870,15 @@ def run_health_check(state: dict[str, Any], view: dict[str, Any]) -> int:
     if not heartbeat_at or current - heartbeat_at > timedelta(minutes=max_age):
         issues.append(f"最近一次五分钟监控心跳超过{max_age}分钟或不存在")
     expiries = raw_active_trigger_expiries(view, current)
+    positions = state.get("account", {}).get("positions") or []
+    has_open_positions = any(
+        int(numeric(item.get("quantity") or item.get("available_quantity"))) > 0
+        for item in positions
+        if isinstance(item, dict)
+    )
     if not expiries:
-        issues.append("当前没有仍在有效期内的已批准价格触发")
+        if has_open_positions:
+            issues.append("当前没有仍在有效期内的已批准价格触发")
     elif min(trading_days_until(item, current.date()) for item in expiries) <= 1:
         issues.append(f"最早触发计划将在{min(expiries).isoformat()}到期，请刷新决策")
     if not issues:

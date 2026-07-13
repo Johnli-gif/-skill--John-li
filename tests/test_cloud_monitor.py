@@ -273,6 +273,38 @@ class CloudMonitorTest(unittest.TestCase):
         )
         self.assertEqual((status, message), ("delivered", ""))
 
+    def test_health_check_passes_for_fresh_heartbeat_and_trigger(self):
+        current = self.current_time(11, 45)
+        state = self.state(positions=[{"code": "300001", "quantity": 100}])
+        view = self.decision_view()
+        view.update({
+            "skill_version": "2.3.0",
+            "generated_at": state["generated_at"],
+            "risk_state": "normal",
+        })
+        with tempfile.TemporaryDirectory() as folder, patch.object(module, "now", return_value=current), patch.dict(os.environ, {
+            "HEARTBEAT_STATE_FILE": str(Path(folder) / "heartbeat.json"),
+        }, clear=False), patch.object(module, "operational_notice") as notice:
+            module.save_json(Path(folder) / "heartbeat.json", {"last_monitor_success_at": self.current_time(11, 35).isoformat()})
+            self.assertEqual(module.run_health_check(state, view), 0)
+            notice.assert_not_called()
+
+    def test_health_check_allows_empty_account_without_triggers(self):
+        current = self.current_time(11, 45)
+        state = self.state(positions=[])
+        view = {
+            "skill_version": "2.3.0",
+            "generated_at": state["generated_at"],
+            "risk_state": "normal",
+            "decisions": [],
+        }
+        with tempfile.TemporaryDirectory() as folder, patch.object(module, "now", return_value=current), patch.dict(os.environ, {
+            "HEARTBEAT_STATE_FILE": str(Path(folder) / "heartbeat.json"),
+        }, clear=False), patch.object(module, "operational_notice") as notice:
+            module.save_json(Path(folder) / "heartbeat.json", {"last_monitor_success_at": self.current_time(11, 35).isoformat()})
+            self.assertEqual(module.run_health_check(state, view), 0)
+            notice.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
