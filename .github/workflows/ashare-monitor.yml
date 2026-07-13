@@ -54,10 +54,13 @@ jobs:
       TRADING_STATE_PATH: data/trading-state.json
       DECISION_LATEST_PATH: data/decision-latest.json
       ALERT_STATE_FILE: data/cloud-monitor/state.json
+      SUMMARY_STATE_FILE: data/cloud-monitor/summary-state.json
+      NOTIFICATION_RECEIPT_FILE: data/cloud-monitor/notification-receipt.json
       TRADE_HOURS_ONLY: "true"
       QUIET_REPEAT_MINUTES: ${{ secrets.QUIET_REPEAT_MINUTES || '30' }}
       WECHAT_WORK_WEBHOOK_URL: ${{ secrets.WECHAT_WORK_WEBHOOK_URL }}
       PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+      PUSHPLUS_ACCESS_KEY: ${{ secrets.PUSHPLUS_ACCESS_KEY }}
       PUSHPLUS_TOPIC: ${{ secrets.PUSHPLUS_TOPIC }}
       TRADING_STATE_JSON: ${{ secrets.TRADING_STATE_JSON }}
       DECISION_LATEST_JSON: ${{ secrets.DECISION_LATEST_JSON }}
@@ -77,7 +80,10 @@ jobs:
       - name: Restore duplicate-alert state
         uses: actions/cache@v6
         with:
-          path: data/cloud-monitor/state.json
+          path: |
+            data/cloud-monitor/state.json
+            data/cloud-monitor/summary-state.json
+            data/cloud-monitor/notification-receipt.json
           key: ashare-monitor-state-${{ github.run_id }}
           restore-keys: |
             ashare-monitor-state-

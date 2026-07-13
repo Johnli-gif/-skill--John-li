@@ -26,7 +26,9 @@ TRADING_STATE = ROOT / "data" / "trading-state.json"
 DECISION_LATEST = ROOT / "data" / "decision-latest.json"
 ALERT_STATE = ROOT / "data" / "cloud-monitor" / "state.json"
 SUMMARY_STATE = ROOT / "data" / "cloud-monitor" / "summary-state.json"
+NOTIFICATION_RECEIPT = ROOT / "data" / "cloud-monitor" / "notification-receipt.json"
 TZ = ZoneInfo("Asia/Shanghai")
+ACTIONABLE_DECISION_ACTIONS = {"买入", "试仓", "加仓", "减仓", "卖出", "止损", "止盈", "清仓"}
 
 
 @dataclass
@@ -326,14 +328,63 @@ def decision_summary_signature(state: dict[str, Any], view: dict[str, Any]) -> s
     return hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:20]
 
 
-def build_decision_summary(state: dict[str, Any], view: dict[str, Any], has_new_state: bool = True) -> tuple[str, str, str, str]:
+def actionable_decisions(view: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        item for item in view.get("decisions", [])
+        if item.get("approved") and item.get("active") and item.get("code")
+        and str(item.get("action") or "") in ACTIONABLE_DECISION_ACTIONS
+    ]
+
+
+def immediate_action_decisions(view: dict[str, Any], current: datetime | None = None) -> list[dict[str, Any]]:
+    """Return only explicitly confirmed same-session actions, never unhit plans."""
+    current = current or now()
+    result: list[dict[str, Any]] = []
+    for item in actionable_decisions(view):
+        execution_status = str((item.get("triggers") or {}).get("execution_status") or "")
+        if not execution_status.startswith("trigger_confirmed_"):
+            continue
+        try:
+            confirmed_at = datetime.fromisoformat(execution_status.removeprefix("trigger_confirmed_"))
+        except ValueError:
+            continue
+        if confirmed_at.tzinfo is None:
+            confirmed_at = confirmed_at.replace(tzinfo=TZ)
+        if confirmed_at.astimezone(TZ).date() == current.astimezone(TZ).date():
+            result.append(item)
+    return result
+
+
+def decision_line(item: dict[str, Any]) -> str:
+    action = str(item.get("action") or "观察")
+    if action not in ACTIONABLE_DECISION_ACTIONS:
+        return f"{item.get('name') or item.get('code')}：{action}；{item.get('rationale') or '沿用原计划'}（{item.get('decision_id') or '--'}）"
+    quantity = int(numeric(item.get("quantity")))
+    quantity_text = f"{quantity}股" if quantity > 0 else ""
+    zone = (item.get("triggers") or {}).get("execution_price_zone")
+    zone_text = ""
+    if isinstance(zone, list) and len(zone) == 2:
+        zone_text = f"，参考{numeric(zone[0]):g}-{numeric(zone[1]):g}元"
+    command = f"【{action}{quantity_text}】{zone_text}"
+    return f"{item.get('name') or item.get('code')}：{command}；{item.get('rationale') or '沿用原计划'}（{item.get('decision_id') or '--'}）"
+
+
+def build_decision_summary(
+    state: dict[str, Any],
+    view: dict[str, Any],
+    has_new_state: bool = True,
+    urgent: bool = False,
+) -> tuple[str, str, str, str]:
     """Format the latest state-engine output; this function never creates a trade decision."""
     account = state.get("account", {})
     risk = state.get("risk", {})
     decisions = [item for item in view.get("decisions", []) if item.get("approved") and item.get("active")]
     account_decision = next((item for item in decisions if not item.get("code")), None)
-    holding_decisions = [item for item in decisions if item.get("code")]
-    title = f"A股定时全面扫描 {now().strftime('%H:%M')}"
+    holding_decisions = sorted(
+        [item for item in decisions if item.get("code")],
+        key=lambda item: (str(item.get("action") or "") not in ACTIONABLE_DECISION_ACTIONS, item.get("code") or ""),
+    )
+    title = f"【立即确认】A股操盘指令 {now().strftime('%H:%M')}" if urgent else f"A股定时全面扫描 {now().strftime('%H:%M')}"
     gate = view.get("market_gate", "--")
     gate_score = account_decision.get("market_gate_score") if account_decision else None
     gate_text = f"{gate}（{gate_score}/10）" if gate_score is not None else gate
@@ -381,9 +432,9 @@ def build_decision_summary(state: dict[str, Any], view: dict[str, Any], has_new_
     ]
     if holding_decisions:
         for item in holding_decisions:
-            line = f"{item.get('name') or item.get('code')}：{item.get('action') or '观察'}；{item.get('rationale') or '沿用原计划'}（{item.get('decision_id') or '--'}）"
+            line = decision_line(item)
             plain.append(f"- {line}")
-            markdown.append(f"- **{item.get('name') or item.get('code')}**：{item.get('action') or '观察'}；{item.get('rationale') or '沿用原计划'}（`{item.get('decision_id') or '--'}`）")
+            markdown.append(f"- **{line}**")
     else:
         plain.append("- 无已批准持仓决策")
         markdown.append("- 无已批准持仓决策")
@@ -396,6 +447,35 @@ def post_json(url: str, payload: dict[str, Any], timeout: int = 10) -> str:
     request = urllib.request.Request(url, data=json.dumps(payload, ensure_ascii=False).encode(), headers={"Content-Type": "application/json"}, method="POST")
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return response.read().decode(errors="replace")
+
+
+def get_json(url: str, headers: dict[str, str] | None = None, timeout: int = 10) -> dict[str, Any]:
+    request = urllib.request.Request(url, headers=headers or {}, method="GET")
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return json.loads(response.read().decode(errors="replace"))
+
+
+def verify_pushplus_delivery(short_code: str, access_key: str, attempts: int = 4) -> tuple[str, str]:
+    """Return delivered, failed, pending, or accepted_unverified."""
+    if not short_code or not access_key:
+        return "accepted_unverified", "PUSHPLUS_ACCESS_KEY未配置"
+    url = "https://www.pushplus.plus/api/open/message/sendMessageResult?" + urllib.parse.urlencode({"shortCode": short_code})
+    last_status = 0
+    last_error = ""
+    for attempt in range(attempts):
+        result = get_json(url, {"access-key": access_key})
+        if int(result.get("code", 0)) != 200:
+            return "verification_failed", str(result.get("msg") or result.get("data") or "查询失败")
+        data = result.get("data") or {}
+        last_status = int(numeric(data.get("status")))
+        last_error = str(data.get("errorMessage") or "")
+        if last_status == 2:
+            return "delivered", ""
+        if last_status == 3:
+            return "failed", last_error or "PushPlus异步投递失败"
+        if attempt + 1 < attempts:
+            time.sleep(0.6)
+    return "pending", last_error or f"异步状态{last_status}"
 
 
 def notify_email(title: str, plain: str) -> bool:
@@ -438,8 +518,28 @@ def notify_all(title: str, plain: str, markdown: str, sms: str, dry_run: bool) -
             response = json.loads(post_json("https://www.pushplus.plus/send", payload))
             if int(response.get("code", 0)) != 200:
                 raise RuntimeError(f"PushPlus返回{response.get('code')}: {response.get('msg') or response.get('data')}")
+            short_code = str(response.get("data") or "")
+            delivery_status, delivery_error = verify_pushplus_delivery(short_code, env("PUSHPLUS_ACCESS_KEY"))
+            save_json(Path(env("NOTIFICATION_RECEIPT_FILE", str(NOTIFICATION_RECEIPT))), {
+                "requested_at": now().isoformat(),
+                "channel": "pushplus-wechat",
+                "title": title,
+                "request_status": "accepted",
+                "short_code": short_code,
+                "delivery_status": delivery_status,
+                "delivery_error": delivery_error,
+            })
+            print(f"pushplus receipt: short_code={short_code} delivery={delivery_status}")
             sent.append("pushplus")
         except Exception as exc:
+            save_json(Path(env("NOTIFICATION_RECEIPT_FILE", str(NOTIFICATION_RECEIPT))), {
+                "requested_at": now().isoformat(),
+                "channel": "pushplus-wechat",
+                "title": title,
+                "request_status": "failed",
+                "delivery_status": "failed",
+                "delivery_error": str(exc),
+            })
             failures.append(f"pushplus:{exc}")
     try:
         if notify_email(title, plain):
@@ -495,7 +595,12 @@ def main() -> int:
         summary_path = Path(env("SUMMARY_STATE_FILE", str(SUMMARY_STATE)))
         signature = decision_summary_signature(state, view)
         prior_summary = load_json(summary_path, {})
-        title, plain, markdown, sms = build_decision_summary(state, view, signature != prior_summary.get("last_signature"))
+        title, plain, markdown, sms = build_decision_summary(
+            state,
+            view,
+            signature != prior_summary.get("last_signature"),
+            urgent=bool(actionable_decisions(view)),
+        )
         channels = notify_all(title, plain, markdown, sms, args.dry_run)
         if channels and not args.dry_run:
             save_json(summary_path, {"last_signature": signature, "last_sent_at": now().isoformat()})
@@ -504,6 +609,16 @@ def main() -> int:
     if not args.ignore_trading_time and env("TRADE_HOURS_ONLY", "true").lower() == "true" and not is_trading_time():
         print("outside trading hours")
         return 0
+    summary_path = Path(env("SUMMARY_STATE_FILE", str(SUMMARY_STATE)))
+    signature = decision_summary_signature(state, view)
+    prior_summary = load_json(summary_path, {})
+    if immediate_action_decisions(view) and signature != prior_summary.get("last_signature"):
+        title, plain, markdown, sms = build_decision_summary(state, view, True, urgent=True)
+        channels = notify_all(title, plain, markdown, sms, args.dry_run)
+        if channels and not args.dry_run:
+            save_json(summary_path, {"last_signature": signature, "last_sent_at": now().isoformat()})
+        print(f"channels: {','.join(channels) if channels else 'none configured'}")
+        return 0 if channels else 1
     current = now()
     triggers = approved_price_triggers(state, view, current)
     if not triggers:

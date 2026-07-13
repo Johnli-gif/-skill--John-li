@@ -3,6 +3,7 @@ import sys
 import unittest
 from datetime import datetime
 from pathlib import Path
+from unittest.mock import patch
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "scripts" / "cloud_monitor.py"
@@ -141,6 +142,40 @@ class CloudMonitorTest(unittest.TestCase):
         self.assertIn("实际成交必须人工确认", markdown)
         _, unchanged, _, _ = module.build_decision_summary(state, view, has_new_state=False)
         self.assertIn("无实质变化，维持原计划", unchanged)
+
+    def test_immediate_reduce_decision_is_actionable_without_price_trigger(self):
+        view = {"decisions": [{
+            "decision_id": "D2", "approved": True, "active": True,
+            "code": "603893", "name": "瑞芯微", "action": "减仓", "quantity": 100,
+            "rationale": "降低半导体集中风险",
+            "triggers": {
+                "execution_price_zone": [217, 219],
+                "execution_status": "trigger_confirmed_2026-07-13T14:52:52+08:00",
+            },
+        }]}
+        self.assertEqual(len(module.actionable_decisions(view)), 1)
+        self.assertEqual(len(module.immediate_action_decisions(view, self.current_time(14, 55))), 1)
+        self.assertEqual(len(module.immediate_action_decisions(view, datetime(2026, 7, 14, 9, 30, tzinfo=module.TZ))), 0)
+        title, plain, _, _ = module.build_decision_summary({}, view, urgent=True)
+        self.assertIn("立即确认", title)
+        self.assertIn("【减仓100股】，参考217-219元", plain)
+
+    def test_unhit_action_plan_is_not_an_immediate_push(self):
+        view = self.decision_view()
+        self.assertEqual(len(module.actionable_decisions(view)), 1)
+        self.assertEqual(module.immediate_action_decisions(view, self.current_time()), [])
+
+    def test_pushplus_delivery_without_access_key_is_not_claimed_delivered(self):
+        status, message = module.verify_pushplus_delivery("abc123", "")
+        self.assertEqual(status, "accepted_unverified")
+        self.assertIn("ACCESS_KEY", message)
+
+    @patch.object(module, "get_json")
+    def test_pushplus_delivery_failure_is_reported(self, get_json):
+        get_json.return_value = {"code": 200, "data": {"status": 3, "errorMessage": "用户未关注公众号"}}
+        status, message = module.verify_pushplus_delivery("abc123", "access-key", attempts=1)
+        self.assertEqual(status, "failed")
+        self.assertIn("未关注", message)
 
 
 if __name__ == "__main__":
