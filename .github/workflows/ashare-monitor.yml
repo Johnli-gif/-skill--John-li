@@ -27,6 +27,14 @@ on:
         options:
           - "false"
           - "true"
+      renewal_notice:
+        description: "Send the external-trigger credential renewal reminder"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
   schedule:
     # Five-minute deterministic price monitor. It does not call an LLM.
     # UTC ranges map to Beijing 09:25-11:35 and 12:55-15:05.
@@ -94,8 +102,10 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Test PushPlus channel
-        if: ${{ inputs.test_push == 'true' }}
+      - name: Send PushPlus maintenance notification
+        if: ${{ inputs.test_push == 'true' || inputs.renewal_notice == 'true' }}
+        env:
+          RENEWAL_NOTICE: ${{ inputs.renewal_notice || 'false' }}
         run: |
           python - <<'PY'
           import json
@@ -106,10 +116,15 @@ jobs:
           if not token:
               raise SystemExit("PUSHPLUS_TOKEN is not configured")
 
+          renewal_notice = os.environ.get("RENEWAL_NOTICE", "false") == "true"
           payload = {
               "token": token,
-              "title": "A股监控通道测试",
-              "content": "操盘策略0710提醒通道已连接。交易时段每5分钟检查已批准价格信号；不会调用AI，也不会自动下单。",
+              "title": "A股云端监控凭证续期提醒" if renewal_notice else "A股监控通道测试",
+              "content": (
+                  "外部定时触发专用GitHub令牌将于2026-10-11到期。请在到期前打开Codex，发送“更新云端监控凭证”完成轮换；交易策略和持仓数据不会因此自动改变。"
+                  if renewal_notice
+                  else "操盘策略0710提醒通道已连接。交易时段每5分钟检查已批准价格信号；不会调用AI，也不会自动下单。"
+              ),
               "template": "markdown",
           }
           req = urllib.request.Request(
