@@ -150,6 +150,15 @@ class CloudMonitorTest(unittest.TestCase):
         self.assertIn("300458", quotes)
         self.assertNotIn("&_", http_get.call_args.args[0])
 
+    def test_shanghai_etf_symbol_uses_sh_prefix(self):
+        self.assertEqual(module.quote_symbol("588200"), "sh588200")
+
+    @patch.object(module, "notify_all")
+    def test_operational_notice_dry_run_never_notifies(self, notify_all):
+        delivered = module.operational_notice("测试告警", ["仅模拟"], dry_run=True)
+        self.assertTrue(delivered)
+        notify_all.assert_not_called()
+
     def test_exchange_holiday_blocks_monitoring(self):
         holiday = datetime(2026, 10, 1, 10, 5, tzinfo=module.TZ)
         self.assertFalse(module.is_trading_time(holiday))

@@ -152,7 +152,7 @@ def completed_trading_sessions_since(as_of: Any, current: datetime | None = None
 
 def quote_symbol(code: str) -> str:
     code = normalize_code(code)
-    if code.startswith(("6", "9")):
+    if code.startswith(("5", "6", "9")):
         return f"sh{code}"
     if code.startswith(("8", "4")):
         return f"bj{code}"
@@ -815,7 +815,12 @@ def mark_monitor_heartbeat(
     })
 
 
-def operational_notice(title: str, details: list[str], repeat_minutes: int = 120) -> bool:
+def operational_notice(title: str, details: list[str], repeat_minutes: int = 120, dry_run: bool = False) -> bool:
+    if dry_run:
+        print(title)
+        for item in details:
+            print(f"- {item}")
+        return True
     path = Path(env("HEALTH_NOTICE_STATE_FILE", str(HEALTH_NOTICE_STATE)))
     prior = load_json(path, {})
     signature = hashlib.sha256((title + "|" + "|".join(details)).encode()).hexdigest()[:20]
@@ -863,7 +868,7 @@ def trading_days_until(target: date, current: date) -> int:
     return count
 
 
-def run_health_check(state: dict[str, Any], view: dict[str, Any]) -> int:
+def run_health_check(state: dict[str, Any], view: dict[str, Any], dry_run: bool = False) -> int:
     current = now()
     coverage_end = calendar_coverage_end()
     if not calendar_covers(current.date()):
@@ -871,6 +876,7 @@ def run_health_check(state: dict[str, Any], view: dict[str, Any]) -> int:
             "A股云端监控异常",
             [f"交易日历未覆盖{current.date().isoformat()}，已停止全部可执行提醒"],
             repeat_minutes=720,
+            dry_run=dry_run,
         )
         return 1 if delivered else 2
     if not is_trading_day(current.date()):
@@ -902,7 +908,7 @@ def run_health_check(state: dict[str, Any], view: dict[str, Any]) -> int:
     if not issues:
         print("monitor health check passed")
         return 0
-    delivered = operational_notice("A股云端监控异常", issues, repeat_minutes=720)
+    delivered = operational_notice("A股云端监控异常", issues, repeat_minutes=720, dry_run=dry_run)
     return 1 if delivered else 2
 
 
@@ -933,13 +939,17 @@ def main() -> int:
     state = load_json(Path(env("TRADING_STATE_PATH", str(TRADING_STATE))), {})
     view = load_json(Path(env("DECISION_LATEST_PATH", str(DECISION_LATEST))), {})
     if args.health_check:
-        return run_health_check(state, view)
+        return run_health_check(state, view, args.dry_run)
     if not args.send_decision_summary and not args.ignore_trading_time and env("TRADE_HOURS_ONLY", "true").lower() == "true" and not is_trading_time():
         print("outside trading hours or exchange holiday")
         return 0
     bundle_valid, bundle_reason = runtime_bundle_is_valid(state, view)
     if not bundle_valid:
-        delivered = operational_notice("A股监控数据已过期", [bundle_reason, "已暂停全部可执行买卖提醒，请刷新账户状态和批准决策"])
+        delivered = operational_notice(
+            "A股监控数据已过期",
+            [bundle_reason, "已暂停全部可执行买卖提醒，请刷新账户状态和批准决策"],
+            dry_run=args.dry_run,
+        )
         return 1 if delivered else 2
     if args.send_decision_summary:
         summary_path = Path(env("SUMMARY_STATE_FILE", str(SUMMARY_STATE)))
@@ -976,7 +986,11 @@ def main() -> int:
     quotes = fetch_consensus_quotes(codes)
     missing = sorted(set(codes) - set(quotes))
     if missing:
-        operational_notice("A股监控行情源异常", [f"未通过腾讯与新浪双源校验：{','.join(missing)}", "本轮不生成任何价格指令"])
+        operational_notice(
+            "A股监控行情源异常",
+            [f"未通过腾讯与新浪双源校验：{','.join(missing)}", "本轮不生成任何价格指令"],
+            dry_run=args.dry_run,
+        )
         return 1
     alerts = evaluate_approved_triggers(state, view, quotes, current)
     mark_monitor_heartbeat(state, view, "quote_check_completed", len(triggers), len(quotes))
