@@ -84,6 +84,22 @@ class LedgerTestCase(unittest.TestCase):
         self.assertEqual(state["drawdown"]["observed_close_sessions"], 1)
         self.assertIsNone(state["drawdown"]["drawdown_20_pct"])
 
+    def test_prior_trading_day_intraday_snapshot_is_stale_next_morning(self):
+        snapshot = self.ledger.add_equity_snapshot({
+            "as_of": "2026-07-10T11:30:00+08:00",
+            "session_type": "intraday",
+            "total_assets": 500000,
+            "cash": 500000,
+            "market_value": 0,
+            "net_cash_flow": 0,
+            "source": "test",
+        })
+        self.ledger.add_positions(snapshot, [])
+        self.ledger.current_time_provider = lambda: datetime(2026, 7, 13, 10, 5, tzinfo=ledger_module.SHANGHAI_TZ)
+        state = self.ledger.compute_state()
+        self.assertEqual(state["data_freshness"]["status"], "stale")
+        self.assertEqual(state["data_freshness"]["completed_sessions_since"], 1)
+
     def test_partial_fill_and_t_plus_one_are_audited(self):
         self.ledger.add_execution({
             "executed_at": "2026-07-10T10:00:00+08:00", "code": "300458", "side": "BUY",
@@ -285,6 +301,18 @@ class LedgerTestCase(unittest.TestCase):
         self.assertIn("600001", self.ledger.compute_state()["risk"]["stop_mismatch_codes"])
         self.assertIn("600001", self.ledger.compute_state()["risk"]["unknown_stop_risk_codes"])
 
+    def test_closed_position_is_excluded_from_open_risk(self):
+        snapshot = self.add_close("2026-07-10", 500000, cash=500000, market=0)
+        self.ledger.add_positions(snapshot, [{
+            "code": "600001", "name": "已清仓", "sector": "芯片", "quantity": 0,
+            "available_quantity": 0, "current_price": 0, "market_value": 0,
+        }])
+        state = self.ledger.compute_state()
+        self.assertEqual(state["account"]["positions"], [])
+        self.assertEqual(state["risk"]["unknown_stop_risk_codes"], [])
+        self.assertFalse(state["risk"]["portfolio_stop_risk_is_lower_bound"])
+        self.assertNotIn("unquantified_existing_stop_risk", state["risk"]["new_buy_vetoes"])
+
     def test_persistent_drawdown_event_advances_to_probation(self):
         self.add_close("2026-01-02", 100000)
         self.add_close("2026-01-05", 96000)
@@ -365,6 +393,24 @@ class LedgerTestCase(unittest.TestCase):
         self.assertIn("sector_market_value_limit", state["risk"]["new_buy_vetoes"])
         self.assertFalse(state["risk"]["new_buys_allowed"])
         self.assertEqual(len(state["account"]["positions"]), 2)
+
+    def test_single_stock_concentration_requires_weight_and_value_breaches(self):
+        limits = ledger_module.NORMAL_LIMITS
+        self.assertFalse(ledger_module.exceeds_single_stock_concentration(55000, 11.0, limits))
+        self.assertFalse(ledger_module.exceeds_single_stock_concentration(100000, 20.0, limits))
+        self.assertFalse(ledger_module.exceeds_single_stock_concentration(100001, 10.0, limits))
+        self.assertTrue(ledger_module.exceeds_single_stock_concentration(100001, 10.01, limits))
+
+        snapshot = self.add_close("2026-07-10", 500000, cash=345000, market=155000)
+        self.ledger.add_positions(snapshot, [
+            {"code": "600276", "name": "小额高占比", "sector": "创新药", "quantity": 1000, "available_quantity": 1000, "current_price": 55, "market_value": 55000, "legacy_position": True},
+            {"code": "600000", "name": "双阈值超限", "sector": "银行", "quantity": 1000, "available_quantity": 1000, "current_price": 100, "market_value": 100001, "legacy_position": True},
+        ])
+        state = self.ledger.compute_state()
+        positions = {item["code"]: item for item in state["account"]["positions"]}
+        self.assertFalse(positions["600276"]["single_stock_concentration_breach"])
+        self.assertTrue(positions["600000"]["single_stock_concentration_breach"])
+        self.assertEqual(state["risk"]["legacy_over_limit_codes"], ["600000"])
 
     def test_probation_requires_five_clean_positive_trades(self):
         self.add_close("2026-07-10", 500000)

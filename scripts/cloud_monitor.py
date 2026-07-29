@@ -253,9 +253,24 @@ def state_is_current(state: dict[str, Any], current: datetime | None = None) -> 
         return False, "account data timestamp is missing or invalid"
     if as_of > current.astimezone(TZ) + timedelta(minutes=5):
         return False, "account data timestamp is in the future"
+    latest_is_close = (state.get("data_freshness") or {}).get("latest_is_close")
     completed = completed_trading_sessions_since(state.get("data_as_of"), current)
     if completed is None:
         return False, "account data timestamp is missing or invalid"
+    local_as_of = as_of.astimezone(TZ)
+    local_current = current.astimezone(TZ)
+    if (
+        latest_is_close is False
+        and is_trading_day(local_as_of.date())
+        and (
+            local_current.date() > local_as_of.date()
+            or (
+                local_current.date() == local_as_of.date()
+                and local_current.hour * 100 + local_current.minute >= 1505
+            )
+        )
+    ):
+        return False, "intraday account snapshot expired after its trading session closed"
     if completed > 0:
         return False, f"account state is {completed} completed trading session(s) old"
     return True, "account state is current relative to the latest completed close"

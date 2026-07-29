@@ -34,6 +34,7 @@ NORMAL_LIMITS = {
     "risk_per_trade_pct": 0.4,
     "initial_position_pct": 5.0,
     "stock_position_pct": 10.0,
+    "stock_market_value_rmb": 100000.0,
     "sector_market_value_pct": 10.0,
     "portfolio_stop_risk_pct": 1.2,
     "sector_stop_risk_pct": 0.6,
@@ -85,16 +86,24 @@ def completed_trading_sessions_since(
     as_of: str,
     current: datetime | None = None,
     calendar_path: Path = CALENDAR_PATH,
+    snapshot_is_close: bool = True,
 ) -> int:
     current = (current or datetime.now(SHANGHAI_TZ)).astimezone(SHANGHAI_TZ)
     latest = datetime.fromisoformat(as_of).astimezone(SHANGHAI_TZ)
     day = latest.date()
-    count = 0
+    count = int(
+        not snapshot_is_close
+        and is_trading_day(day, calendar_path)
+        and (
+            current.date() > day
+            or (current.date() == day and current.hour * 100 + current.minute >= 1505)
+        )
+    )
     while day < current.date():
         day = day.fromordinal(day.toordinal() + 1)
         if is_trading_day(day, calendar_path) and day < current.date():
             count += 1
-    if current.date() > latest.date() and is_trading_day(current.date(), calendar_path) and current.hour >= 16:
+    if current.date() > latest.date() and is_trading_day(current.date(), calendar_path) and current.hour * 100 + current.minute >= 1505:
         count += 1
     return count
 
@@ -127,6 +136,18 @@ def as_float(value: Any, default: float = 0.0) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def exceeds_single_stock_concentration(
+    market_value: Any,
+    account_weight_pct: Any,
+    limits: dict[str, Any],
+) -> bool:
+    """Apply the single-stock cap only when both relative and absolute limits are breached."""
+    return (
+        as_float(account_weight_pct) > as_float(limits.get("stock_position_pct"), float("inf")) + 1e-9
+        and as_float(market_value) > as_float(limits.get("stock_market_value_rmb"), float("inf")) + 1e-9
+    )
 
 
 def json_field(item: dict[str, Any], name: str, default: Any) -> Any:
@@ -791,18 +812,24 @@ class TradingLedger:
             limits["initial_position_pct"] = min(limits["initial_position_pct"], PROBATION_LIMITS["initial_position_pct"])
         positions = {item["code"]: item for item in state.get("account", {}).get("positions", [])}
         current_stock_value = as_float((positions.get(code) or {}).get("market_value"))
+        projected_stock_value = current_stock_value + proposed_value
         current_sector_value_pct = as_float(state["risk"].get("sector_market_value_pct", {}).get(decision["sector"]))
         current_sector_risk_pct = as_float(state["risk"].get("sector_stop_risk_pct", {}).get(decision["sector"]))
         projected = {
             "initial_position_pct": exposure_pct,
-            "stock_position_pct": (current_stock_value + proposed_value) / total_assets * 100,
+            "stock_position_pct": projected_stock_value / total_assets * 100,
             "sector_market_value_pct": current_sector_value_pct + exposure_pct,
             "portfolio_stop_risk_pct": as_float(state["risk"].get("portfolio_stop_risk_pct")) + account_risk_pct,
             "sector_stop_risk_pct": current_sector_risk_pct + account_risk_pct,
             "total_exposure_pct": as_float(state["account"].get("exposure_pct")) + exposure_pct,
             "risk_per_trade_pct": account_risk_pct,
         }
-        exceeded = [key for key, value in projected.items() if value > as_float(limits.get(key), float("inf")) + 1e-9]
+        exceeded = [
+            key for key, value in projected.items()
+            if key != "stock_position_pct" and value > as_float(limits.get(key), float("inf")) + 1e-9
+        ]
+        if exceeds_single_stock_concentration(projected_stock_value, projected["stock_position_pct"], limits):
+            exceeded.append("stock_position_pct")
         if exceeded:
             raise ValueError("entry exceeds projected limits: " + ",".join(exceeded))
         open_codes = {item["code"] for item in positions.values() if int(as_float(item.get("quantity"))) > 0}
@@ -1063,8 +1090,11 @@ class TradingLedger:
         stop_mismatch_codes: list[str] = []
         rendered_positions: list[dict[str, Any]] = []
         for item in positions:
+            quantity = int(as_float(item.get("quantity")))
+            if quantity <= 0:
+                continue
             sector = item.get("sector") or "未分类"
-            value = as_float(item.get("market_value"), as_float(item.get("current_price")) * as_float(item.get("quantity")))
+            value = as_float(item.get("market_value"), as_float(item.get("current_price")) * quantity)
             sector_value[sector] = sector_value.get(sector, 0.0) + value
             decision_stop = active_stops.get(item["code"], {})
             snapshot_stop = as_float(item.get("planned_stop"))
@@ -1077,7 +1107,7 @@ class TradingLedger:
             atr = as_float(item.get("atr14"))
             if stop > 0 and price > 0:
                 per_share = effective_risk_distance(price, stop, atr)
-                risk_value = per_share * as_float(item.get("quantity"))
+                risk_value = per_share * quantity
                 open_risk += risk_value
                 sector_risk[sector] = sector_risk.get(sector, 0.0) + risk_value
                 risk_quantified = atr > 0 and stop_basis in ALLOWED_STOP_BASES
@@ -1097,6 +1127,9 @@ class TradingLedger:
                 "stop_basis": stop_basis, "atr14": atr or None, "risk_quantified": risk_quantified,
                 "legacy_position": bool(item["legacy_position"]),
                 "account_weight_pct": value / total_assets * 100 if total_assets else None,
+                "single_stock_concentration_breach": exceeds_single_stock_concentration(
+                    value, value / total_assets * 100 if total_assets else None, limits
+                ),
                 "risk_at_stop": risk_value, "risk_at_stop_is_lower_bound": bool(risk_value is not None and not risk_quantified),
             })
         exposure = market_value / total_assets * 100 if total_assets else 0.0
@@ -1110,7 +1143,12 @@ class TradingLedger:
         current_time = self.current_time_provider()
         if current_time.tzinfo is None:
             current_time = current_time.replace(tzinfo=SHANGHAI_TZ)
-        completed_sessions = completed_trading_sessions_since(latest_any["as_of"], current_time, self.calendar_path) if latest_any else None
+        completed_sessions = completed_trading_sessions_since(
+            latest_any["as_of"],
+            current_time,
+            self.calendar_path,
+            snapshot_is_close=bool(latest_any and latest_any["session_type"] == "close"),
+        ) if latest_any else None
         calendar_known = calendar_covers(current_time.astimezone(SHANGHAI_TZ).date(), self.calendar_path)
         state = {
             "schema_version": 1,
@@ -1156,7 +1194,9 @@ class TradingLedger:
                 "sector_stop_risk_pct": sector_risk_pct,
                 "unknown_stop_risk_codes": unknown_risk_codes,
                 "stop_mismatch_codes": stop_mismatch_codes,
-                "legacy_over_limit_codes": [p["code"] for p in rendered_positions if (p["account_weight_pct"] or 0) > limits["stock_position_pct"]],
+                "legacy_over_limit_codes": [
+                    p["code"] for p in rendered_positions if p["single_stock_concentration_breach"]
+                ],
                 "new_buy_vetoes": new_buy_vetoes,
             },
             "probation": probation,
@@ -1268,7 +1308,7 @@ def build_analysis_context(state: dict[str, Any], decision_view: dict[str, Any],
         key: item.get(key) for key in (
             "code", "name", "sector", "quantity", "available_quantity", "cost_price", "current_price", "pnl",
             "account_weight_pct", "planned_stop", "stop_basis", "atr14", "risk_quantified", "risk_at_stop",
-            "risk_at_stop_is_lower_bound",
+            "risk_at_stop_is_lower_bound", "single_stock_concentration_breach",
         )
     } for item in state.get("account", {}).get("positions", [])]
     plans: list[dict[str, Any]] = []
@@ -1318,6 +1358,12 @@ def build_analysis_context(state: dict[str, Any], decision_view: dict[str, Any],
             "drawdown_20_pct": state.get("drawdown", {}).get("drawdown_20_pct"),
             "portfolio_stop_risk_pct": risk.get("portfolio_stop_risk_pct"),
             "portfolio_stop_risk_is_lower_bound": risk.get("portfolio_stop_risk_is_lower_bound"),
+            "single_stock_concentration_policy": {
+                "operator": "and",
+                "account_weight_pct_gt": (risk.get("limits") or {}).get("stock_position_pct"),
+                "market_value_rmb_gt": (risk.get("limits") or {}).get("stock_market_value_rmb"),
+            },
+            "legacy_over_limit_codes": risk.get("legacy_over_limit_codes"),
             "sector_market_value_pct": risk.get("sector_market_value_pct"),
             "sector_stop_risk_pct": risk.get("sector_stop_risk_pct"),
             "unknown_stop_risk_codes": risk.get("unknown_stop_risk_codes"),

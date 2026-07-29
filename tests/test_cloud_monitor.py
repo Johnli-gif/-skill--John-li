@@ -98,6 +98,14 @@ class CloudMonitorTest(unittest.TestCase):
         }]}
         self.assertEqual(module.approved_price_triggers(state, view, self.current_time()), [])
 
+    def test_prior_day_intraday_snapshot_is_not_current_next_morning(self):
+        state = self.state(data_as_of="2026-07-10T11:30:00+08:00")
+        state["data_freshness"] = {"latest_is_close": False}
+        current = datetime(2026, 7, 13, 10, 5, tzinfo=module.TZ)
+        allowed, reason = module.state_is_current(state, current)
+        self.assertFalse(allowed)
+        self.assertIn("intraday account snapshot expired", reason)
+
     def test_expired_or_undated_trigger_is_blocked(self):
         state = self.state()
         expired = self.decision_view()
